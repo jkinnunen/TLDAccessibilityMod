@@ -15,10 +15,18 @@ namespace TLDAccessibility.A11y.UI
 
         private static Type tmpTextType;
         private static bool tmpTextChecked;
+        private static bool tmpTextMembersCached;
+        private static PropertyInfo tmpTextProperty;
+        private static PropertyInfo tmpRectTransformProperty;
+        private static MethodInfo tmpTextSetter;
+        private static IReadOnlyList<MethodInfo> tmpSetTextMethods;
         private static Type tmpDropdownType;
         private static bool tmpDropdownChecked;
+        private static PropertyInfo tmpDropdownValueProperty;
+        private static PropertyInfo tmpDropdownOptionsProperty;
         private static Type tmpInputFieldType;
         private static bool tmpInputFieldChecked;
+        private static PropertyInfo tmpInputTextProperty;
 
         public static Type TmpTextType => GetCachedType(ref tmpTextType, ref tmpTextChecked, TmpTextTypeName);
 
@@ -27,37 +35,58 @@ namespace TLDAccessibility.A11y.UI
         public static bool IsTmpText(Component component)
         {
             Type type = TmpTextType;
-            return type != null && component != null && type.IsInstanceOfType(component);
+            if (component == null)
+            {
+                return false;
+            }
+
+            if (type != null)
+            {
+                return type.IsInstanceOfType(component);
+            }
+
+            return string.Equals(component.GetType().FullName, TmpTextTypeName, StringComparison.Ordinal);
         }
 
         public static Component GetTmpTextComponent(GameObject target)
         {
             Type type = TmpTextType;
-            return GetComponentByType(target, type);
+            if (type != null)
+            {
+                return GetComponentByType(target, type);
+            }
+
+            if (target == null)
+            {
+                return null;
+            }
+
+            foreach (Component component in target.GetComponents<Component>())
+            {
+                if (IsTmpText(component))
+                {
+                    return component;
+                }
+            }
+
+            return null;
         }
 
         public static IEnumerable<Component> FindAllTmpTextComponents(bool includeInactive)
         {
-            Type type = TmpTextType;
-            if (type == null)
-            {
-                return Enumerable.Empty<Component>();
-            }
-
             return UnityEngine.Object.FindObjectsOfType<Component>(includeInactive)
-                .Where(component => component != null && type.IsInstanceOfType(component));
+                .Where(component => component != null && IsTmpText(component));
         }
 
         public static IEnumerable<Component> GetTmpTextComponentsInChildren(GameObject target, bool includeInactive)
         {
-            Type type = TmpTextType;
-            if (type == null || target == null)
+            if (target == null)
             {
                 return Enumerable.Empty<Component>();
             }
 
             return target.GetComponentsInChildren<Component>(includeInactive)
-                .Where(component => component != null && type.IsInstanceOfType(component));
+                .Where(component => component != null && IsTmpText(component));
         }
 
         public static string GetTmpTextValue(Component component)
@@ -67,7 +96,8 @@ namespace TLDAccessibility.A11y.UI
                 return null;
             }
 
-            PropertyInfo property = component.GetType().GetProperty("text", BindingFlags.Instance | BindingFlags.Public);
+            EnsureTmpTextMembers();
+            PropertyInfo property = tmpTextProperty ?? component.GetType().GetProperty("text", BindingFlags.Instance | BindingFlags.Public);
             return property?.GetValue(component) as string;
         }
 
@@ -78,8 +108,21 @@ namespace TLDAccessibility.A11y.UI
                 return null;
             }
 
-            PropertyInfo property = component.GetType().GetProperty("rectTransform", BindingFlags.Instance | BindingFlags.Public);
+            EnsureTmpTextMembers();
+            PropertyInfo property = tmpRectTransformProperty ?? component.GetType().GetProperty("rectTransform", BindingFlags.Instance | BindingFlags.Public);
             return property?.GetValue(component) as RectTransform;
+        }
+
+        public static MethodInfo GetTmpTextSetter()
+        {
+            EnsureTmpTextMembers();
+            return tmpTextSetter;
+        }
+
+        public static IReadOnlyList<MethodInfo> GetTmpSetTextMethods()
+        {
+            EnsureTmpTextMembers();
+            return tmpSetTextMethods ?? Array.Empty<MethodInfo>();
         }
 
         public static bool TryGetTmpDropdownValue(GameObject target, out string value)
@@ -97,20 +140,20 @@ namespace TLDAccessibility.A11y.UI
                 return false;
             }
 
-            PropertyInfo valueProperty = type.GetProperty("value", BindingFlags.Instance | BindingFlags.Public);
-            PropertyInfo optionsProperty = type.GetProperty("options", BindingFlags.Instance | BindingFlags.Public);
-            if (valueProperty == null || optionsProperty == null)
+            tmpDropdownValueProperty ??= type.GetProperty("value", BindingFlags.Instance | BindingFlags.Public);
+            tmpDropdownOptionsProperty ??= type.GetProperty("options", BindingFlags.Instance | BindingFlags.Public);
+            if (tmpDropdownValueProperty == null || tmpDropdownOptionsProperty == null)
             {
                 return false;
             }
 
-            object optionsValue = optionsProperty.GetValue(component);
+            object optionsValue = tmpDropdownOptionsProperty.GetValue(component);
             if (optionsValue is not IList optionsList)
             {
                 return false;
             }
 
-            object rawIndex = valueProperty.GetValue(component);
+            object rawIndex = tmpDropdownValueProperty.GetValue(component);
             if (rawIndex is not int index || index < 0 || index >= optionsList.Count)
             {
                 return false;
@@ -142,8 +185,8 @@ namespace TLDAccessibility.A11y.UI
                 return false;
             }
 
-            PropertyInfo textProperty = type.GetProperty("text", BindingFlags.Instance | BindingFlags.Public);
-            value = textProperty?.GetValue(component) as string;
+            tmpInputTextProperty ??= type.GetProperty("text", BindingFlags.Instance | BindingFlags.Public);
+            value = tmpInputTextProperty?.GetValue(component) as string;
             return value != null;
         }
 
@@ -163,7 +206,7 @@ namespace TLDAccessibility.A11y.UI
         {
             foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
             {
-                Type type = assembly.GetType(typeName, false);
+                Type type = FindTypeInAssembly(assembly, typeName);
                 if (type != null)
                 {
                     return type;
@@ -171,6 +214,78 @@ namespace TLDAccessibility.A11y.UI
             }
 
             return null;
+        }
+
+        private static Type FindTypeInAssembly(Assembly assembly, string typeName)
+        {
+            if (assembly == null)
+            {
+                return null;
+            }
+
+            Type type = assembly.GetType(typeName, false);
+            if (type != null)
+            {
+                return type;
+            }
+
+            Type[] types;
+            try
+            {
+                types = assembly.GetTypes();
+            }
+            catch (ReflectionTypeLoadException ex)
+            {
+                types = ex.Types;
+            }
+
+            if (types == null)
+            {
+                return null;
+            }
+
+            foreach (Type candidate in types)
+            {
+                if (candidate == null)
+                {
+                    continue;
+                }
+
+                if (string.Equals(candidate.FullName, typeName, StringComparison.Ordinal))
+                {
+                    return candidate;
+                }
+            }
+
+            return null;
+        }
+
+        private static void EnsureTmpTextMembers()
+        {
+            if (tmpTextMembersCached)
+            {
+                return;
+            }
+
+            Type type = TmpTextType;
+            if (type == null)
+            {
+                tmpTextMembersCached = true;
+                return;
+            }
+
+            tmpTextProperty = type.GetProperty("text", BindingFlags.Instance | BindingFlags.Public);
+            tmpRectTransformProperty = type.GetProperty("rectTransform", BindingFlags.Instance | BindingFlags.Public);
+            tmpTextSetter = tmpTextProperty?.GetSetMethod(false);
+            tmpSetTextMethods = type.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                .Where(method => method.Name == "SetText")
+                .Where(method =>
+                {
+                    ParameterInfo[] parameters = method.GetParameters();
+                    return parameters.Length > 0 && parameters[0].ParameterType == typeof(string);
+                })
+                .ToList();
+            tmpTextMembersCached = true;
         }
 
         internal static Component GetComponentByType(GameObject target, Type type)
