@@ -16,7 +16,7 @@ namespace TLDAccessibility
         private ScreenReviewController screenReview;
         private HarmonyLib.Harmony harmony;
 
-        public override void OnApplicationStart()
+        public override void OnInitializeMelon()
         {
             Settings.instance.AddToModSettings(BuildInfo.Name);
             A11yLogger.Initialize(LoggerInstance);
