@@ -18,6 +18,10 @@ namespace TLDAccessibility.A11y.Capture
 
             harmony.PatchAll(typeof(TextChangePatches));
             PatchNgui(harmony);
+
+            bool canPatchTmp = TmpReflection.GetTmpTextSetter() != null || TmpReflection.GetTmpSetTextMethods().Count > 0;
+            // If TMP_Text lacks patchable members, fall back to periodic polling.
+            TmpTextPolling.Enabled = TmpReflection.HasTmpText && !canPatchTmp;
         }
 
         [HarmonyPatch]
@@ -25,25 +29,8 @@ namespace TLDAccessibility.A11y.Capture
         {
             private static IEnumerable<MethodBase> TargetMethods()
             {
-                Type tmpTextType = TmpReflection.TmpTextType;
-                if (tmpTextType == null)
-                {
-                    yield break;
-                }
-
-                foreach (MethodInfo method in tmpTextType.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
-                {
-                    if (method.Name != "SetText")
-                    {
-                        continue;
-                    }
-
-                    ParameterInfo[] parameters = method.GetParameters();
-                    if (parameters.Length > 0 && parameters[0].ParameterType == typeof(string))
-                    {
-                        yield return method;
-                    }
-                }
+                // Patch TMP_Text.SetText(string, ...) overloads to detect runtime text changes.
+                return TmpReflection.GetTmpSetTextMethods();
             }
 
             private static void Postfix(object __instance, string text)
@@ -60,8 +47,8 @@ namespace TLDAccessibility.A11y.Capture
         {
             private static MethodBase TargetMethod()
             {
-                Type tmpTextType = TmpReflection.TmpTextType;
-                return tmpTextType != null ? AccessTools.PropertySetter(tmpTextType, "text") : null;
+                // Patch TMP_Text.text setter for direct property assignments.
+                return TmpReflection.GetTmpTextSetter();
             }
 
             private static void Postfix(object __instance, string value)

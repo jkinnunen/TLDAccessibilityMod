@@ -38,6 +38,7 @@ namespace TLDAccessibility
         {
             speechService?.Update();
             focusTracker?.Update();
+            TmpTextPolling.Update();
 
             HandleHotkeys();
         }
