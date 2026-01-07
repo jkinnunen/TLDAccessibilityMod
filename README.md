@@ -102,6 +102,57 @@ for more information.
 
 See [Unity README](./ModComponent/Unity/README.md).
 
+## TLDAccessibility screen reader layer
+
+This mod provides a screen-reader-first accessibility layer (Tolk primary, System.Speech fallback) with UI focus narration, screen review, and text-change capture. No other mods are required to integrate.
+
+### Hotkeys (defaults)
+
+- Toggle focus auto-speak: F5
+- Speak focus: F6
+- Read screen (enter/refresh screen review): F7
+- Next item: F8
+- Previous item: F9
+- Read all: F10
+- Repeat last: F11
+- Stop speaking: F12
+- Activate: Enter
+- Exit screen review: Escape
+
+### Settings
+
+- Auto speak focus changes (default on)
+- Auto speak text changes (default off)
+- Suppress numeric auto speech (default on)
+- Cooldown seconds
+- Min interval seconds
+- Max auto speech per second
+- Verbosity (Short/Normal/Detailed)
+- Allow unknown NGUI visibility in snapshot
+- Rebindable hotkeys listed above
+
+### Troubleshooting
+
+- If no speech is heard, ensure the Tolk DLL is available to MelonLoader. The mod falls back to System.Speech when Tolk cannot initialize.
+- If UI text is missing in screen review, check that the UI element is visible and not clipped by a Mask/RectMask2D.
+- For noisy narration, disable auto speak text changes or increase the cooldown seconds.
+
+### Acceptance checklist (manual)
+
+1. Launch game to main menu:
+   - Press Read screen -> speaks "N items" then first item.
+   - Next/Previous speaks items like "Options, button" etc.
+   - Activate on "Options" opens options menu; narration confirms activation.
+2. In options menu:
+   - Focus changes speak labels with role+state (e.g., "Subtitles, toggle, on").
+   - Sliders speak percent.
+3. No flood:
+   - Auto narration does not spam repeating numeric updates.
+4. Visibility correctness:
+   - Off-screen or clipped list items (outside RectMask2D/Mask) are not read during snapshot or auto-speak.
+5. Text capture:
+   - If a toast/dialog appears with visible text, it is spoken once with dedupe.
+
 ## Thanks
 
 [@ds5678] for the [ModComponent_TemplateProject](https://github.com/ds5678/ModComponent_TemplateProject)
