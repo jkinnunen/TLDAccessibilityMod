@@ -1,9 +1,11 @@
 using System;
 using System.Speech.Synthesis;
+using System.Runtime.Versioning;
 using TLDAccessibility.A11y.Logging;
 
 namespace TLDAccessibility.A11y.Output
 {
+    [SupportedOSPlatform("windows")]
     internal sealed class SystemSpeechBackend : IA11ySpeechBackend
     {
         private readonly SpeechSynthesizer synthesizer;
@@ -11,6 +13,13 @@ namespace TLDAccessibility.A11y.Output
 
         public SystemSpeechBackend()
         {
+            if (!OperatingSystem.IsWindows())
+            {
+                isAvailable = false;
+                A11yLogger.Warning("System speech backend unavailable: non-Windows platform.");
+                return;
+            }
+
             try
             {
                 synthesizer = new SpeechSynthesizer();
