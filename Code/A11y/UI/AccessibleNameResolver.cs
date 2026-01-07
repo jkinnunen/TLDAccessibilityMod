@@ -586,7 +586,7 @@ namespace TLDAccessibility.A11y.UI
                 return null;
             }
 
-            Component component = target.GetComponent(NGUIReflection.GetUILabelType());
+            Component component = TmpReflection.GetComponentByType(target, NGUIReflection.GetUILabelType());
             if (component != null)
             {
                 return component;

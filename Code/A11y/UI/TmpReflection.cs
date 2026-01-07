@@ -33,7 +33,7 @@ namespace TLDAccessibility.A11y.UI
         public static Component GetTmpTextComponent(GameObject target)
         {
             Type type = TmpTextType;
-            return type == null || target == null ? null : target.GetComponent(type);
+            return GetComponentByType(target, type);
         }
 
         public static IEnumerable<Component> FindAllTmpTextComponents(bool includeInactive)
@@ -44,8 +44,8 @@ namespace TLDAccessibility.A11y.UI
                 return Enumerable.Empty<Component>();
             }
 
-            UnityEngine.Object[] found = UnityEngine.Object.FindObjectsOfType(type, includeInactive);
-            return found.OfType<Component>();
+            return UnityEngine.Object.FindObjectsOfType<Component>(includeInactive)
+                .Where(component => component != null && type.IsInstanceOfType(component));
         }
 
         public static IEnumerable<Component> GetTmpTextComponentsInChildren(GameObject target, bool includeInactive)
@@ -56,8 +56,8 @@ namespace TLDAccessibility.A11y.UI
                 return Enumerable.Empty<Component>();
             }
 
-            Component[] found = target.GetComponentsInChildren(type, includeInactive);
-            return found.OfType<Component>();
+            return target.GetComponentsInChildren<Component>(includeInactive)
+                .Where(component => component != null && type.IsInstanceOfType(component));
         }
 
         public static string GetTmpTextValue(Component component)
@@ -91,7 +91,7 @@ namespace TLDAccessibility.A11y.UI
                 return false;
             }
 
-            Component component = target.GetComponent(type);
+            Component component = GetComponentByType(target, type);
             if (component == null)
             {
                 return false;
@@ -136,7 +136,7 @@ namespace TLDAccessibility.A11y.UI
                 return false;
             }
 
-            Component component = target.GetComponent(type);
+            Component component = GetComponentByType(target, type);
             if (component == null)
             {
                 return false;
@@ -167,6 +167,25 @@ namespace TLDAccessibility.A11y.UI
                 if (type != null)
                 {
                     return type;
+                }
+            }
+
+            return null;
+        }
+
+        internal static Component GetComponentByType(GameObject target, Type type)
+        {
+            if (type == null || target == null)
+            {
+                return null;
+            }
+
+            Component[] components = target.GetComponents<Component>();
+            foreach (Component component in components)
+            {
+                if (component != null && type.IsInstanceOfType(component))
+                {
+                    return component;
                 }
             }
 
