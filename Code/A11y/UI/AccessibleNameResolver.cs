@@ -1,10 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using TMPro;
 using TLDAccessibility.A11y.Model;
 using UnityEngine;
 using UnityEngine.UI;
+using UnityObject = UnityEngine.Object;
 
 namespace TLDAccessibility.A11y.UI
 {
@@ -25,19 +25,19 @@ namespace TLDAccessibility.A11y.UI
             label.Name = ResolveOverrideName(target);
             if (string.IsNullOrWhiteSpace(label.Name))
             {
-                label.Name = ResolveTextOnObject(target, out Object source);
+                label.Name = ResolveTextOnObject(target, out UnityObject source);
                 label.LabelSource = source;
             }
 
             if (string.IsNullOrWhiteSpace(label.Name))
             {
-                label.Name = ResolveTextOnChildren(target, out Object source);
+                label.Name = ResolveTextOnChildren(target, out UnityObject source);
                 label.LabelSource = source;
             }
 
             if (string.IsNullOrWhiteSpace(label.Name))
             {
-                label.Name = ResolveNearbyLabel(target, out Object source, out string header);
+                label.Name = ResolveNearbyLabel(target, out UnityObject source, out string header);
                 label.LabelSource = source;
                 label.GroupHeader = header;
             }
@@ -63,13 +63,13 @@ namespace TLDAccessibility.A11y.UI
             return null;
         }
 
-        private static string ResolveTextOnObject(GameObject target, out Object source)
+        private static string ResolveTextOnObject(GameObject target, out UnityObject source)
         {
             source = null;
-            TMP_Text tmp = target.GetComponent<TMP_Text>();
+            Component tmp = TmpReflection.GetTmpTextComponent(target);
             if (tmp != null && VisibilityUtil.IsElementVisible(tmp, true))
             {
-                string text = VisibilityUtil.NormalizeText(tmp.text);
+                string text = VisibilityUtil.NormalizeText(TmpReflection.GetTmpTextValue(tmp));
                 if (!VisibilityUtil.IsGarbageText(text))
                 {
                     source = tmp;
@@ -102,11 +102,10 @@ namespace TLDAccessibility.A11y.UI
             return null;
         }
 
-        private static string ResolveTextOnChildren(GameObject target, out Object source)
+        private static string ResolveTextOnChildren(GameObject target, out UnityObject source)
         {
             source = null;
-            TMP_Text[] tmpTexts = target.GetComponentsInChildren<TMP_Text>(true);
-            foreach (TMP_Text tmp in tmpTexts)
+            foreach (Component tmp in TmpReflection.GetTmpTextComponentsInChildren(target, true))
             {
                 if (tmp == null || tmp.gameObject == target)
                 {
@@ -118,7 +117,7 @@ namespace TLDAccessibility.A11y.UI
                     continue;
                 }
 
-                string text = VisibilityUtil.NormalizeText(tmp.text);
+                string text = VisibilityUtil.NormalizeText(TmpReflection.GetTmpTextValue(tmp));
                 if (VisibilityUtil.IsGarbageText(text))
                 {
                     continue;
@@ -181,7 +180,7 @@ namespace TLDAccessibility.A11y.UI
             return null;
         }
 
-        private static string ResolveNearbyLabel(GameObject target, out Object source, out string header)
+        private static string ResolveNearbyLabel(GameObject target, out UnityObject source, out string header)
         {
             source = null;
             header = null;
@@ -193,7 +192,7 @@ namespace TLDAccessibility.A11y.UI
 
             Vector2 controlCenter = controlRect.center;
             List<CandidateLabel> candidates = new List<CandidateLabel>();
-            foreach (TMP_Text tmp in GetAllVisibleTmpTexts())
+            foreach (Component tmp in GetAllVisibleTmpTexts())
             {
                 if (tmp == null || tmp.gameObject == target)
                 {
@@ -260,7 +259,7 @@ namespace TLDAccessibility.A11y.UI
 
             Vector2 controlCenter = controlRect.center;
             CandidateLabel bestHeader = null;
-            foreach (TMP_Text tmp in GetAllVisibleTmpTexts())
+            foreach (Component tmp in GetAllVisibleTmpTexts())
             {
                 if (!TryGetHeaderCandidate(tmp, controlCenter, out CandidateLabel candidate))
                 {
@@ -338,14 +337,9 @@ namespace TLDAccessibility.A11y.UI
                 return "dropdown";
             }
 
-            TMP_Dropdown tmpDropdown = target.GetComponent<TMP_Dropdown>();
-            if (tmpDropdown != null)
+            if (TmpReflection.TryGetTmpDropdownValue(target, out string tmpDropdownValue))
             {
-                if (tmpDropdown.options != null && tmpDropdown.value >= 0 && tmpDropdown.value < tmpDropdown.options.Count)
-                {
-                    value = tmpDropdown.options[tmpDropdown.value].text;
-                }
-
+                value = tmpDropdownValue;
                 return "dropdown";
             }
 
@@ -356,10 +350,9 @@ namespace TLDAccessibility.A11y.UI
                 return "edit";
             }
 
-            TMP_InputField tmpInput = target.GetComponent<TMP_InputField>();
-            if (tmpInput != null)
+            if (TmpReflection.TryGetTmpInputValue(target, out string tmpInputValue))
             {
-                value = ResolveInputValue(tmpInput.text);
+                value = ResolveInputValue(tmpInputValue);
                 return "edit";
             }
 
@@ -515,9 +508,10 @@ namespace TLDAccessibility.A11y.UI
                 return VisibilityUtil.TryGetScreenRect(graphic.rectTransform, out rect);
             }
 
-            if (component is TMP_Text tmp)
+            if (TmpReflection.IsTmpText(component))
             {
-                return VisibilityUtil.TryGetScreenRect(tmp.rectTransform, out rect);
+                RectTransform rectTransform = TmpReflection.GetTmpRectTransform(component);
+                return rectTransform != null && VisibilityUtil.TryGetScreenRect(rectTransform, out rect);
             }
 
             if (IsNguiLabel(component))
@@ -544,9 +538,9 @@ namespace TLDAccessibility.A11y.UI
 
         private static string GetText(Component component)
         {
-            if (component is TMP_Text tmp)
+            if (TmpReflection.IsTmpText(component))
             {
-                return VisibilityUtil.NormalizeText(tmp.text);
+                return VisibilityUtil.NormalizeText(TmpReflection.GetTmpTextValue(component));
             }
 
             if (component is Text uiText)
@@ -562,9 +556,9 @@ namespace TLDAccessibility.A11y.UI
             return null;
         }
 
-        private static IEnumerable<TMP_Text> GetAllVisibleTmpTexts()
+        private static IEnumerable<Component> GetAllVisibleTmpTexts()
         {
-            return UnityEngine.Object.FindObjectsOfType<TMP_Text>(true)
+            return TmpReflection.FindAllTmpTextComponents(true)
                 .Where(tmp => tmp != null && VisibilityUtil.IsElementVisible(tmp, true));
         }
 

@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -26,11 +25,6 @@ namespace TLDAccessibility.A11y.UI
             if (component is Graphic graphic)
             {
                 return IsGraphicVisible(graphic);
-            }
-
-            if (component is TMP_Text tmpText)
-            {
-                return IsGraphicVisible(tmpText);
             }
 
             if (IsNguiLabel(component))
