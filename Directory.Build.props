@@ -11,7 +11,7 @@ Licensed under the MIT license. See LICENSE file in the project root for details
 	-->
 	<PropertyGroup>
 		<!--TLD install root directory - auto-detected in most cases-->
-		<TLDDir></TLDDir>
+		<TLDDir>C:\Games\The Long Dark</TLDDir>
 		<!--Unity Editor path - only needed for building AssetBundles-->
 		<UnityEditorPath></UnityEditorPath>
 		<!--Relative path from the project root to the Unity Project directory.

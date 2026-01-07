@@ -1,6 +1,6 @@
 ﻿using MelonLoader;
 
-namespace TLDModTemplate
+namespace TLDAccessibility
 {
     internal class Implementation : MelonMod
     {

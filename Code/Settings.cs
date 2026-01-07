@@ -1,6 +1,6 @@
 ﻿using ModSettings;
 
-namespace TLDModTemplate
+namespace TLDAccessibility
 {
     internal class Settings : JsonModSettings
     {
