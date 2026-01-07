@@ -27,7 +27,9 @@ namespace TLDAccessibility.A11y.Output
             }
             else
             {
-                fallbackBackend = new SystemSpeechBackend();
+                fallbackBackend = OperatingSystem.IsWindows()
+                    ? new SystemSpeechBackend()
+                    : new NullSpeechBackend();
             }
         }
 
