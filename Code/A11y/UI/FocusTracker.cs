@@ -70,7 +70,7 @@ namespace TLDAccessibility.A11y.UI
             return $"focus_{target.GetInstanceID()}";
         }
 
-        public static void ApplyHarmonyPatches(Harmony harmony, FocusTracker tracker)
+        public static void ApplyHarmonyPatches(HarmonyLib.Harmony harmony, FocusTracker tracker)
         {
             if (harmony == null || tracker == null)
             {

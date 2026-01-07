@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Reflection;
 using HarmonyLib;
-using TMPro;
 using TLDAccessibility.A11y.UI;
 using UnityEngine.UI;
 
@@ -10,7 +9,7 @@ namespace TLDAccessibility.A11y.Capture
 {
     internal static class TextChangePatches
     {
-        public static void Apply(Harmony harmony)
+        public static void Apply(HarmonyLib.Harmony harmony)
         {
             if (harmony == null)
             {
@@ -26,7 +25,13 @@ namespace TLDAccessibility.A11y.Capture
         {
             private static IEnumerable<MethodBase> TargetMethods()
             {
-                foreach (MethodInfo method in typeof(TMP_Text).GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+                Type tmpTextType = TmpReflection.TmpTextType;
+                if (tmpTextType == null)
+                {
+                    yield break;
+                }
+
+                foreach (MethodInfo method in tmpTextType.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
                 {
                     if (method.Name != "SetText")
                     {
@@ -41,18 +46,30 @@ namespace TLDAccessibility.A11y.Capture
                 }
             }
 
-            private static void Postfix(TMP_Text __instance, string text)
+            private static void Postfix(object __instance, string text)
             {
-                TextChangeHandler.HandleTextChange(__instance, text);
+                if (__instance is UnityEngine.Component component)
+                {
+                    TextChangeHandler.HandleTextChange(component, text);
+                }
             }
         }
 
-        [HarmonyPatch(typeof(TMP_Text), "set_text")]
+        [HarmonyPatch]
         private static class TmpTextSetterPatch
         {
-            private static void Postfix(TMP_Text __instance, string value)
+            private static MethodBase TargetMethod()
             {
-                TextChangeHandler.HandleTextChange(__instance, value);
+                Type tmpTextType = TmpReflection.TmpTextType;
+                return tmpTextType != null ? AccessTools.PropertySetter(tmpTextType, "text") : null;
+            }
+
+            private static void Postfix(object __instance, string value)
+            {
+                if (__instance is UnityEngine.Component component)
+                {
+                    TextChangeHandler.HandleTextChange(component, value);
+                }
             }
         }
 
@@ -65,7 +82,7 @@ namespace TLDAccessibility.A11y.Capture
             }
         }
 
-        private static void PatchNgui(Harmony harmony)
+        private static void PatchNgui(HarmonyLib.Harmony harmony)
         {
             Type uiLabelType = NGUIReflection.GetUILabelType();
             if (uiLabelType == null)

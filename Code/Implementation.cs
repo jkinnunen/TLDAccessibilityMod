@@ -14,7 +14,7 @@ namespace TLDAccessibility
         private A11ySpeechService speechService;
         private FocusTracker focusTracker;
         private ScreenReviewController screenReview;
-        private Harmony harmony;
+        private HarmonyLib.Harmony harmony;
 
         public override void OnApplicationStart()
         {
@@ -27,7 +27,7 @@ namespace TLDAccessibility
             screenReview = new ScreenReviewController(speechService);
             TextChangeHandler.SpeechService = speechService;
 
-            harmony = new Harmony("TLDAccessibility.A11y");
+            harmony = new HarmonyLib.Harmony("TLDAccessibility.A11y");
             FocusTracker.ApplyHarmonyPatches(harmony, focusTracker);
             TextChangePatches.Apply(harmony);
 

@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using TMPro;
 using TLDAccessibility.A11y.Logging;
 using TLDAccessibility.A11y.Model;
 using TLDAccessibility.A11y.Output;
@@ -158,7 +157,7 @@ namespace TLDAccessibility.A11y.UI
                 items.Add(item);
             }
 
-            foreach (TMP_Text tmp in UnityEngine.Object.FindObjectsOfType<TMP_Text>(true))
+            foreach (Component tmp in TmpReflection.FindAllTmpTextComponents(true))
             {
                 AddStaticText(tmp, items, usedLabels);
             }
@@ -205,10 +204,14 @@ namespace TLDAccessibility.A11y.UI
                 item.ScreenRect = rect;
                 item.HasRect = true;
             }
-            else if (component is TMP_Text tmp && VisibilityUtil.TryGetScreenRect(tmp.rectTransform, out Rect tmpRect))
+            else if (TmpReflection.IsTmpText(component))
             {
-                item.ScreenRect = tmpRect;
-                item.HasRect = true;
+                RectTransform rectTransform = TmpReflection.GetTmpRectTransform(component);
+                if (rectTransform != null && VisibilityUtil.TryGetScreenRect(rectTransform, out Rect tmpRect))
+                {
+                    item.ScreenRect = tmpRect;
+                    item.HasRect = true;
+                }
             }
             else if (component is Component)
             {
@@ -254,9 +257,9 @@ namespace TLDAccessibility.A11y.UI
 
         private string GetText(Component component)
         {
-            if (component is TMP_Text tmp)
+            if (TmpReflection.IsTmpText(component))
             {
-                return VisibilityUtil.NormalizeText(tmp.text);
+                return VisibilityUtil.NormalizeText(TmpReflection.GetTmpTextValue(component));
             }
 
             if (component is Text uiText)
