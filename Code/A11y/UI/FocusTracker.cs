@@ -13,6 +13,7 @@ namespace TLDAccessibility.A11y.UI
     {
         private readonly A11ySpeechService speechService;
         private GameObject lastFocused;
+        private GameObject lastSelected;
 
         public FocusTracker(A11ySpeechService speechService)
         {
@@ -23,15 +24,16 @@ namespace TLDAccessibility.A11y.UI
         {
             EventSystem eventSystem = EventSystem.current;
             GameObject current = eventSystem != null ? eventSystem.currentSelectedGameObject : null;
-            if (current != lastFocused)
+            if (current != lastSelected)
             {
-                HandleFocusChanged(current);
+                HandleUiSelectionChanged(current);
             }
         }
 
         public void HandleFocusChanged(GameObject current)
         {
             lastFocused = current;
+            lastSelected = current;
             if (!Settings.Instance.AutoSpeakFocusChanges)
             {
                 return;
@@ -55,6 +57,41 @@ namespace TLDAccessibility.A11y.UI
             return label?.ToSpokenString(true);
         }
 
+        public string BuildUiSelectionNarration(GameObject current)
+        {
+            if (current == null)
+            {
+                return null;
+            }
+
+            AccessibleLabel label = AccessibleNameResolver.Resolve(current);
+            if (label != null && !string.IsNullOrWhiteSpace(label.Name))
+            {
+                return label.ToSpokenString(true);
+            }
+
+            string fallback = ResolveSelectionText(current);
+            if (string.IsNullOrWhiteSpace(fallback))
+            {
+                fallback = current.name;
+            }
+
+            if (label != null && !string.IsNullOrWhiteSpace(label.Value))
+            {
+                if (string.IsNullOrWhiteSpace(fallback))
+                {
+                    return label.Value;
+                }
+
+                if (!fallback.Contains(label.Value, StringComparison.OrdinalIgnoreCase))
+                {
+                    return $"{fallback}, {label.Value}";
+                }
+            }
+
+            return fallback;
+        }
+
         public GameObject GetCurrentFocus()
         {
             return lastFocused;
@@ -68,6 +105,102 @@ namespace TLDAccessibility.A11y.UI
             }
 
             return $"focus_{target.GetInstanceID()}";
+        }
+
+        private void HandleUiSelectionChanged(GameObject current)
+        {
+            lastSelected = current;
+            if (current != null)
+            {
+                lastFocused = current;
+            }
+
+            string spokenText = BuildUiSelectionNarration(current);
+            string name = current != null ? current.name : "None";
+            A11yLogger.Info($"UI selected changed: {name} -> {spokenText ?? "none"}");
+
+            if (!Settings.Instance.AutoSpeakFocusChanges)
+            {
+                return;
+            }
+
+            if (!string.IsNullOrWhiteSpace(spokenText))
+            {
+                speechService.Speak(spokenText, A11ySpeechPriority.Normal, "ui_selected", true);
+            }
+        }
+
+        private static string ResolveSelectionText(GameObject target)
+        {
+            if (target == null)
+            {
+                return null;
+            }
+
+            Component tmp = TmpReflection.GetTmpTextComponent(target);
+            if (tmp != null && VisibilityUtil.IsElementVisible(tmp, true))
+            {
+                string text = VisibilityUtil.NormalizeText(TmpReflection.GetTmpTextValue(tmp));
+                if (!VisibilityUtil.IsGarbageText(text))
+                {
+                    return text;
+                }
+            }
+
+            Text uiText = target.GetComponent<Text>();
+            if (uiText != null && VisibilityUtil.IsElementVisible(uiText, true))
+            {
+                string text = VisibilityUtil.NormalizeText(uiText.text);
+                if (!VisibilityUtil.IsGarbageText(text))
+                {
+                    return text;
+                }
+            }
+
+            foreach (Component tmpChild in TmpReflection.GetTmpTextComponentsInChildren(target, true))
+            {
+                if (tmpChild == null || tmpChild.gameObject == target)
+                {
+                    continue;
+                }
+
+                if (!VisibilityUtil.IsElementVisible(tmpChild, true))
+                {
+                    continue;
+                }
+
+                string text = VisibilityUtil.NormalizeText(TmpReflection.GetTmpTextValue(tmpChild));
+                if (VisibilityUtil.IsGarbageText(text))
+                {
+                    continue;
+                }
+
+                return text;
+            }
+
+            Text[] uiTexts = target.GetComponentsInChildren<Text>(true);
+            foreach (Text childText in uiTexts)
+            {
+                if (childText == null || childText.gameObject == target)
+                {
+                    continue;
+                }
+
+                if (!VisibilityUtil.IsElementVisible(childText, true))
+                {
+                    continue;
+                }
+
+                string text = VisibilityUtil.NormalizeText(childText.text);
+                if (VisibilityUtil.IsGarbageText(text))
+                {
+                    continue;
+                }
+
+                return text;
+            }
+
+            return null;
         }
 
         public static void ApplyHarmonyPatches(HarmonyLib.Harmony harmony, FocusTracker tracker)
