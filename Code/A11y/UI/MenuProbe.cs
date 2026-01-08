@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using TLDAccessibility.A11y.Logging;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -422,7 +423,8 @@ namespace TLDAccessibility.A11y.UI
                 return new List<Component>();
             }
 
-            UnityEngine.Object[] found = UnityEngine.Resources.FindObjectsOfTypeAll(tmpType);
+            Il2CppSystem.Type il2cppType = Il2CppInterop.Runtime.Il2CppType.From(tmpType);
+            UnityEngine.Object[] found = UnityEngine.Resources.FindObjectsOfTypeAll(il2cppType);
             List<Component> results = new List<Component>(found.Length);
             foreach (UnityEngine.Object obj in found)
             {
