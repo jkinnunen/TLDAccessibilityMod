@@ -5,6 +5,7 @@ using TLDAccessibility.A11y.Logging;
 using TLDAccessibility.A11y.Model;
 using TLDAccessibility.A11y.Output;
 using TLDAccessibility.A11y.UI;
+using System.Collections.Generic;
 using System.Text;
 using UnityEngine;
 using UnityEngine.EventSystems;
@@ -19,6 +20,13 @@ namespace TLDAccessibility
         private HarmonyLib.Harmony harmony;
         private bool loggedSettingsUnavailable;
         private Settings settings;
+        private MenuProbe menuProbe;
+        private Dictionary<int, MenuProbe.CandidateSnapshot> lastMenuSnapshot;
+        private float menuNavigationWindowEnd;
+        private float lastMenuHighlightSpeakTime;
+        private const float MenuProbeWindowSeconds = 0.25f;
+        private const float MenuProbeSpeakCooldownSeconds = 0.25f;
+        private const float MenuProbeChangeThreshold = 0.5f;
 
         public override void OnInitializeMelon()
         {
@@ -30,6 +38,7 @@ namespace TLDAccessibility
             focusTracker = new FocusTracker(speechService);
             screenReview = new ScreenReviewController(speechService);
             TextChangeHandler.SpeechService = speechService;
+            menuProbe = new MenuProbe();
 
             harmony = new HarmonyLib.Harmony("TLDAccessibility.A11y");
             FocusTracker.ApplyHarmonyPatches(harmony, focusTracker);
@@ -46,6 +55,7 @@ namespace TLDAccessibility
             focusTracker?.Update();
             TmpTextPolling.Update();
 
+            HandleMenuProbeNavigation();
             HandleDebugHotkey();
             HandleHotkeys();
         }
@@ -55,6 +65,12 @@ namespace TLDAccessibility
             bool ctrl = Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl);
             bool alt = Input.GetKey(KeyCode.LeftAlt) || Input.GetKey(KeyCode.RightAlt);
             bool shift = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
+            if (ctrl && alt && shift && Input.GetKeyDown(KeyCode.F10))
+            {
+                HandleMenuProbeSnapshotHotkey();
+                return;
+            }
+
             if (ctrl && alt && shift && Input.GetKeyDown(KeyCode.F11))
             {
                 HandleSelectionSnapshotHotkey();
@@ -66,6 +82,113 @@ namespace TLDAccessibility
                 A11yLogger.Info("Debug speech hotkey pressed.");
                 speechService?.Speak("TLDAccessibility debug hotkey speech test.", A11ySpeechPriority.Critical, "debug_hotkey", false);
             }
+        }
+
+        private void HandleMenuProbeNavigation()
+        {
+            if (menuProbe == null)
+            {
+                return;
+            }
+
+            float now = Time.unscaledTime;
+            bool navigationPressed = Input.GetKeyDown(KeyCode.UpArrow)
+                || Input.GetKeyDown(KeyCode.DownArrow)
+                || Input.GetKeyDown(KeyCode.LeftArrow)
+                || Input.GetKeyDown(KeyCode.RightArrow);
+
+            if (navigationPressed)
+            {
+                menuNavigationWindowEnd = now + MenuProbeWindowSeconds;
+                if (lastMenuSnapshot == null)
+                {
+                    lastMenuSnapshot = menuProbe.Capture().ById;
+                    return;
+                }
+            }
+
+            if (menuNavigationWindowEnd <= 0f || now > menuNavigationWindowEnd)
+            {
+                lastMenuSnapshot = null;
+                menuNavigationWindowEnd = 0f;
+                return;
+            }
+
+            MenuProbe.SnapshotResult currentSnapshot = menuProbe.Capture();
+            if (lastMenuSnapshot != null)
+            {
+                MenuProbe.CandidateSnapshot bestCandidate = null;
+                float bestScore = 0f;
+
+                foreach (MenuProbe.CandidateSnapshot candidate in currentSnapshot.Candidates)
+                {
+                    if (!lastMenuSnapshot.TryGetValue(candidate.InstanceId, out MenuProbe.CandidateSnapshot previous))
+                    {
+                        continue;
+                    }
+
+                    float score = MenuProbe.CalculateChangeScore(previous, candidate);
+                    if (score > bestScore)
+                    {
+                        bestScore = score;
+                        bestCandidate = candidate;
+                    }
+                }
+
+                if (bestCandidate != null && bestScore > MenuProbeChangeThreshold)
+                {
+                    if (now - lastMenuHighlightSpeakTime >= MenuProbeSpeakCooldownSeconds)
+                    {
+                        speechService?.Speak($"Selected: {bestCandidate.Text}", A11ySpeechPriority.Normal, "menu_highlight", true);
+                        lastMenuHighlightSpeakTime = now;
+                    }
+                }
+            }
+
+            lastMenuSnapshot = currentSnapshot.ById;
+        }
+
+        private void HandleMenuProbeSnapshotHotkey()
+        {
+            if (menuProbe == null)
+            {
+                return;
+            }
+
+            MenuProbe.SnapshotResult snapshot = menuProbe.Capture();
+            if (snapshot.Candidates.Count == 0)
+            {
+                A11yLogger.Info("MenuProbe snapshot: no visible text candidates.");
+                speechService?.Speak("MenuProbe: no visible text candidates", A11ySpeechPriority.Critical, "menu_probe_snapshot", false);
+                return;
+            }
+
+            List<(MenuProbe.CandidateSnapshot Candidate, float Score)> ranked = new List<(MenuProbe.CandidateSnapshot, float)>();
+            foreach (MenuProbe.CandidateSnapshot candidate in snapshot.Candidates)
+            {
+                ranked.Add((candidate, MenuProbe.CalculateProminenceScore(candidate)));
+            }
+
+            ranked.Sort((left, right) => right.Score.CompareTo(left.Score));
+            MenuProbe.CandidateSnapshot topCandidate = ranked[0].Candidate;
+            speechService?.Speak($"MenuProbe: top candidate: {topCandidate.LogText}", A11ySpeechPriority.Critical, "menu_probe_snapshot", false);
+
+            StringBuilder builder = new StringBuilder();
+            builder.AppendLine("MenuProbe snapshot: top visible text candidates:");
+            int limit = Mathf.Min(15, ranked.Count);
+            for (int i = 0; i < limit; i++)
+            {
+                MenuProbe.CandidateSnapshot candidate = ranked[i].Candidate;
+                Vector3 position = candidate.WorldPosition;
+                builder.Append($"{i + 1}. \"{candidate.LogText}\" ");
+                builder.Append($"Path={candidate.HierarchyPath}; ");
+                builder.Append($"Alpha={candidate.Color.a:0.00}; ");
+                builder.Append($"FontSize={candidate.FontSize:0.0}; ");
+                builder.Append($"FontStyle={candidate.FontStyle}; ");
+                builder.AppendLine($"Position=({position.x:0.00}, {position.y:0.00}, {position.z:0.00})");
+            }
+
+            A11yLogger.Info(builder.ToString());
         }
 
         private void HandleSelectionSnapshotHotkey()
