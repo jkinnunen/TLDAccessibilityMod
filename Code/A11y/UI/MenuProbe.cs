@@ -58,17 +58,51 @@ namespace TLDAccessibility.A11y.UI
             public Dictionary<int, CandidateSnapshot> ById { get; }
         }
 
-        public SnapshotResult Capture()
+        private sealed class FilterCounters
+        {
+            public int Total { get; set; }
+            public int AfterText { get; set; }
+            public int AfterActiveInHierarchy { get; set; }
+            public int AfterIsActiveAndEnabled { get; set; }
+            public int AfterVisibility { get; set; }
+            public int AfterMask { get; set; }
+
+            public string Format(string label)
+            {
+                return $"MenuProbe census ({label}): total={Total}, afterText={AfterText}, afterActiveInHierarchy={AfterActiveInHierarchy}, afterIsActiveAndEnabled={AfterIsActiveAndEnabled}, afterVisibility={AfterVisibility}, afterMask={AfterMask}";
+            }
+        }
+
+        public SnapshotResult Capture(bool logDiagnostics = false)
         {
             List<CandidateSnapshot> candidates = new List<CandidateSnapshot>();
-            foreach (Component component in TmpReflection.FindAllTmpTextComponents(false))
+            List<Component> tmpComponents = TmpReflection.FindAllTmpTextComponents(false).ToList();
+            List<Text> uiTextComponents = UnityEngine.Object.FindObjectsOfType<Text>(false).ToList();
+            bool useUiTextFallback = tmpComponents.Count == 0 && uiTextComponents.Count > 0;
+
+            IEnumerable<Component> sourceComponents = tmpComponents;
+            if (useUiTextFallback)
             {
-                if (!TryBuildCandidate(component, out CandidateSnapshot candidate))
+                sourceComponents = uiTextComponents.Cast<Component>();
+            }
+            else
+            {
+                sourceComponents = tmpComponents.Concat(uiTextComponents.Cast<Component>());
+            }
+
+            foreach (Component component in sourceComponents)
+            {
+                if (!TryBuildCandidate(component, GetTextValue, out CandidateSnapshot candidate))
                 {
                     continue;
                 }
 
                 candidates.Add(candidate);
+            }
+
+            if (logDiagnostics)
+            {
+                LogDiagnostics(tmpComponents, uiTextComponents, candidates);
             }
 
             return new SnapshotResult(candidates);
@@ -134,7 +168,7 @@ namespace TLDAccessibility.A11y.UI
             return string.Join("/", segments);
         }
 
-        private static bool TryBuildCandidate(Component component, out CandidateSnapshot candidate)
+        private static bool TryBuildCandidate(Component component, Func<Component, string> textResolver, out CandidateSnapshot candidate)
         {
             candidate = null;
             if (component == null)
@@ -157,7 +191,7 @@ namespace TLDAccessibility.A11y.UI
                 }
             }
 
-            string text = VisibilityUtil.NormalizeText(TmpReflection.GetTmpTextValue(component));
+            string text = VisibilityUtil.NormalizeText(textResolver?.Invoke(component));
             if (string.IsNullOrWhiteSpace(text))
             {
                 return false;
@@ -192,6 +226,26 @@ namespace TLDAccessibility.A11y.UI
                 activeInHierarchy,
                 worldPosition);
             return true;
+        }
+
+        private static string GetTextValue(Component component)
+        {
+            if (component == null)
+            {
+                return null;
+            }
+
+            if (component is Text uiText)
+            {
+                return uiText.text;
+            }
+
+            if (TmpReflection.IsTmpText(component))
+            {
+                return TmpReflection.GetTmpTextValue(component);
+            }
+
+            return null;
         }
 
         private static Color GetComponentColor(Component component)
@@ -235,6 +289,150 @@ namespace TLDAccessibility.A11y.UI
             }
 
             return fallback;
+        }
+
+        private static void LogDiagnostics(List<Component> tmpComponents, List<Text> uiTextComponents, List<CandidateSnapshot> candidates)
+        {
+            int tmpFindObjectsCount = tmpComponents?.Count ?? 0;
+            int uiTextFindObjectsCount = uiTextComponents?.Count ?? 0;
+
+            List<Component> tmpAll = FindAllTmpTextComponents();
+            List<Text> uiTextAll = UnityEngine.Resources.FindObjectsOfTypeAll<Text>()
+                .Where(text => text != null)
+                .ToList();
+
+            int tmpFindObjectsAllCount = tmpAll.Count;
+            int uiTextFindObjectsAllCount = uiTextAll.Count;
+            int selectableCount = UnityEngine.Resources.FindObjectsOfTypeAll<Selectable>().Length;
+            int canvasCount = UnityEngine.Resources.FindObjectsOfTypeAll<Canvas>().Length;
+
+            A11yLogger.Info($"MenuProbe census: TMP total (FindObjectsOfType)={tmpFindObjectsCount}, TMP total (FindObjectsOfTypeAll)={tmpFindObjectsAllCount}, UI.Text total (FindObjectsOfType)={uiTextFindObjectsCount}, UI.Text total (FindObjectsOfTypeAll)={uiTextFindObjectsAllCount}, Selectable total (FindObjectsOfTypeAll)={selectableCount}, Canvas total (FindObjectsOfTypeAll)={canvasCount}");
+
+            FilterCounters tmpCounters = new FilterCounters();
+            foreach (Component component in tmpAll)
+            {
+                AccumulateCounters(component, TmpReflection.GetTmpTextValue, tmpCounters);
+            }
+
+            FilterCounters uiTextCounters = new FilterCounters();
+            foreach (Text text in uiTextAll)
+            {
+                AccumulateCounters(text, component => (component as Text)?.text, uiTextCounters);
+            }
+
+            A11yLogger.Info(tmpCounters.Format("TMP"));
+            A11yLogger.Info(uiTextCounters.Format("UI.Text"));
+
+            if (candidates.Count == 0)
+            {
+                List<Component> rawTextComponents = tmpAll.Concat(uiTextAll.Cast<Component>())
+                    .Where(component => !string.IsNullOrWhiteSpace(VisibilityUtil.NormalizeText(GetTextValue(component))))
+                    .ToList();
+                if (rawTextComponents.Count == 0)
+                {
+                    A11yLogger.Info("MenuProbe census: no raw text components found (FindObjectsOfTypeAll).");
+                    return;
+                }
+
+                int limit = Mathf.Min(rawTextComponents.Count, 20);
+                A11yLogger.Info($"MenuProbe census: logging {limit} raw text components (before visibility filtering).");
+                for (int i = 0; i < limit; i++)
+                {
+                    Component component = rawTextComponents[i];
+                    string typeLabel = TmpReflection.IsTmpText(component) ? "TMP_Text" : component is Text ? "UI.Text" : component.GetType().Name;
+                    string text = TrimText(VisibilityUtil.NormalizeText(GetTextValue(component)), 120);
+                    Behaviour behaviour = component as Behaviour;
+                    bool enabled = behaviour?.enabled ?? true;
+                    bool activeInHierarchy = component.gameObject.activeInHierarchy;
+                    Color color = GetComponentColor(component);
+                    string hierarchyPath = BuildHierarchyPath(component.transform);
+                    A11yLogger.Info($"MenuProbe census raw[{i + 1}]: type={typeLabel}, text=\"{text}\", activeInHierarchy={activeInHierarchy}, enabled={enabled}, color.a={color.a:0.###}, path={hierarchyPath}");
+                }
+            }
+        }
+
+        private static void AccumulateCounters(Component component, Func<Component, string> textResolver, FilterCounters counters)
+        {
+            if (component == null || counters == null)
+            {
+                return;
+            }
+
+            counters.Total++;
+            string text = VisibilityUtil.NormalizeText(textResolver?.Invoke(component));
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return;
+            }
+
+            counters.AfterText++;
+
+            if (!component.gameObject.activeInHierarchy)
+            {
+                return;
+            }
+
+            counters.AfterActiveInHierarchy++;
+
+            Behaviour behaviour = component as Behaviour;
+            if (behaviour != null && !behaviour.isActiveAndEnabled)
+            {
+                return;
+            }
+
+            counters.AfterIsActiveAndEnabled++;
+
+            bool passesVisibility = false;
+            bool passesMask = false;
+            if (component is Graphic graphic)
+            {
+                VisibilityUtil.TryGetGraphicVisibility(graphic, out passesVisibility, out passesMask);
+            }
+            else
+            {
+                passesVisibility = VisibilityUtil.IsElementVisible(component, false);
+                passesMask = passesVisibility;
+            }
+
+            if (!passesVisibility)
+            {
+                return;
+            }
+
+            counters.AfterVisibility++;
+
+            if (!passesMask)
+            {
+                return;
+            }
+
+            counters.AfterMask++;
+        }
+
+        private static List<Component> FindAllTmpTextComponents()
+        {
+            if (!TmpReflection.HasTmpText)
+            {
+                return new List<Component>();
+            }
+
+            Type tmpType = TmpReflection.TmpTextType;
+            if (tmpType == null)
+            {
+                return new List<Component>();
+            }
+
+            UnityEngine.Object[] found = UnityEngine.Resources.FindObjectsOfTypeAll(tmpType);
+            List<Component> results = new List<Component>(found.Length);
+            foreach (UnityEngine.Object obj in found)
+            {
+                if (obj is Component component)
+                {
+                    results.Add(component);
+                }
+            }
+
+            return results;
         }
 
         private static int GetIntProperty(Component component, string propertyName, int fallback = 0)

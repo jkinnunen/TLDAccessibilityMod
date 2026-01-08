@@ -155,7 +155,7 @@ namespace TLDAccessibility
                 return;
             }
 
-            MenuProbe.SnapshotResult snapshot = menuProbe.Capture();
+            MenuProbe.SnapshotResult snapshot = menuProbe.Capture(true);
             if (snapshot.Candidates.Count == 0)
             {
                 A11yLogger.Info("MenuProbe snapshot: no visible text candidates.");
