@@ -21,16 +21,9 @@ namespace TLDAccessibility.A11y.Output
         public A11ySpeechService()
         {
             primaryBackend = new TolkBackend();
-            if (primaryBackend.IsAvailable)
-            {
-                fallbackBackend = null;
-            }
-            else
-            {
-                fallbackBackend = OperatingSystem.IsWindows()
-                    ? new SystemSpeechBackend()
-                    : new NullSpeechBackend();
-            }
+            fallbackBackend = OperatingSystem.IsWindows()
+                ? new SystemSpeechBackend()
+                : new NullSpeechBackend();
         }
 
         public bool IsAvailable => primaryBackend.IsAvailable || (fallbackBackend?.IsAvailable ?? false);
@@ -128,13 +121,31 @@ namespace TLDAccessibility.A11y.Output
                 return;
             }
 
-            IA11ySpeechBackend backend = primaryBackend.IsAvailable ? primaryBackend : fallbackBackend;
-            if (backend == null || !backend.IsAvailable)
+            bool primaryAvailable = primaryBackend.IsAvailable;
+            bool fallbackAvailable = fallbackBackend?.IsAvailable ?? false;
+            if (!primaryAvailable && !fallbackAvailable)
+            {
+                A11yLogger.Warning("Speech output unavailable: no backend is ready.");
+                return;
+            }
+
+            bool spoke = false;
+            if (primaryAvailable)
+            {
+                spoke = primaryBackend.Speak(item.Text);
+            }
+
+            if (!spoke && fallbackAvailable)
+            {
+                A11yLogger.Warning("Primary speech backend unavailable or failed; attempting fallback.");
+                spoke = fallbackBackend.Speak(item.Text);
+            }
+
+            if (!spoke)
             {
                 return;
             }
 
-            backend.Speak(item.Text);
             lastSpokenText = item.Text;
             lastSpokenTime = Time.unscaledTime;
             lastTextTimes[item.Text] = lastSpokenTime;

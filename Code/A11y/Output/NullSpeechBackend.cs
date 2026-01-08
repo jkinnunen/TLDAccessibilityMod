@@ -4,8 +4,9 @@ namespace TLDAccessibility.A11y.Output
     {
         public bool IsAvailable => false;
 
-        public void Speak(string text)
+        public bool Speak(string text)
         {
+            return false;
         }
 
         public void Stop()
