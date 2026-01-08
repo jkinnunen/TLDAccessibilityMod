@@ -94,8 +94,8 @@ namespace TLDAccessibility.A11y.UI
         public SnapshotResult Capture(bool logDiagnostics = false)
         {
             List<CandidateSnapshot> candidates = new List<CandidateSnapshot>();
-            List<Component> tmpComponents = TmpReflection.FindAllTmpTextComponents(false).ToList();
-            List<Text> uiTextComponents = UnityEngine.Object.FindObjectsOfType<Text>(false).ToList();
+            List<Component> tmpComponents = FindAllTmpTextComponents();
+            List<Text> uiTextComponents = FindObjectsOfTypeAllIl2Cpp<Text>();
             bool useUiTextFallback = tmpComponents.Count == 0 && uiTextComponents.Count > 0;
 
             IEnumerable<Component> sourceComponents = tmpComponents;
@@ -312,20 +312,19 @@ namespace TLDAccessibility.A11y.UI
 
         private static UiToolkitSnapshot LogDiagnostics(List<Component> tmpComponents, List<Text> uiTextComponents, List<CandidateSnapshot> candidates)
         {
-            int tmpFindObjectsCount = tmpComponents?.Count ?? 0;
-            int uiTextFindObjectsCount = uiTextComponents?.Count ?? 0;
+            List<Component> tmpAll = tmpComponents ?? FindAllTmpTextComponents();
+            List<Text> uiTextAll = uiTextComponents ?? FindObjectsOfTypeAllIl2Cpp<Text>();
 
-            List<Component> tmpAll = FindAllTmpTextComponents();
-            List<Text> uiTextAll = UnityEngine.Resources.FindObjectsOfTypeAll<Text>()
-                .Where(text => text != null)
-                .ToList();
-
+            int tmpFindObjectsCount = CountActiveInHierarchy(tmpAll);
+            int uiTextFindObjectsCount = CountActiveInHierarchy(uiTextAll);
             int tmpFindObjectsAllCount = tmpAll.Count;
             int uiTextFindObjectsAllCount = uiTextAll.Count;
-            int selectableCount = UnityEngine.Resources.FindObjectsOfTypeAll<Selectable>().Length;
-            int canvasCount = UnityEngine.Resources.FindObjectsOfTypeAll<Canvas>().Length;
+            int selectableCount = FindObjectsOfTypeAllIl2Cpp<Selectable>().Count;
+            int canvasCount = FindObjectsOfTypeAllIl2Cpp<Canvas>().Count;
+            int transformCount = FindObjectsOfTypeAllIl2Cpp<Transform>().Count;
 
-            A11yLogger.Info($"MenuProbe census: TMP total (FindObjectsOfType)={tmpFindObjectsCount}, TMP total (FindObjectsOfTypeAll)={tmpFindObjectsAllCount}, UI.Text total (FindObjectsOfType)={uiTextFindObjectsCount}, UI.Text total (FindObjectsOfTypeAll)={uiTextFindObjectsAllCount}, Selectable total (FindObjectsOfTypeAll)={selectableCount}, Canvas total (FindObjectsOfTypeAll)={canvasCount}");
+            A11yLogger.Info($"MenuProbe census: TMP total (active)={tmpFindObjectsCount}, TMP total (all)={tmpFindObjectsAllCount}, UI.Text total (active)={uiTextFindObjectsCount}, UI.Text total (all)={uiTextFindObjectsAllCount}, Selectable total (all)={selectableCount}, Canvas total (all)={canvasCount}");
+            A11yLogger.Info($"MenuProbe sanity: Transform total={transformCount}");
 
             FilterCounters tmpCounters = new FilterCounters();
             foreach (Component component in tmpAll)
@@ -349,7 +348,7 @@ namespace TLDAccessibility.A11y.UI
                     .ToList();
                 if (rawTextComponents.Count == 0)
                 {
-                    A11yLogger.Info("MenuProbe census: no raw text components found (FindObjectsOfTypeAll).");
+                    A11yLogger.Info("MenuProbe census: no raw text components found (IL2CPP enumeration).");
                     return CaptureUiToolkitSnapshot();
                 }
 
@@ -374,14 +373,14 @@ namespace TLDAccessibility.A11y.UI
 
         private static UiToolkitSnapshot CaptureUiToolkitSnapshot()
         {
-            UIDocument[] documents = UnityEngine.Resources.FindObjectsOfTypeAll<UIDocument>();
-            int documentCount = documents?.Length ?? 0;
+            List<UIDocument> documents = FindObjectsOfTypeAllIl2Cpp<UIDocument>();
+            int documentCount = documents?.Count ?? 0;
             A11yLogger.Info($"MenuProbe UI Toolkit census: UIDocument total={documentCount}");
 
             List<string> textCandidates = new List<string>();
             HashSet<string> uniqueTexts = new HashSet<string>();
 
-            if (documents == null || documents.Length == 0)
+            if (documents == null || documents.Count == 0)
             {
                 return new UiToolkitSnapshot(documentCount, textCandidates);
             }
@@ -578,14 +577,48 @@ namespace TLDAccessibility.A11y.UI
                 return new List<Component>();
             }
 
-            Il2CppSystem.Type il2cppType = Il2CppInterop.Runtime.Il2CppType.From(tmpType);
+            return FindObjectsOfTypeAllIl2Cpp<Component>(tmpType);
+        }
+
+        private static int CountActiveInHierarchy<T>(IEnumerable<T> components) where T : Component
+        {
+            if (components == null)
+            {
+                return 0;
+            }
+
+            int count = 0;
+            foreach (T component in components)
+            {
+                if (component != null && component.gameObject.activeInHierarchy)
+                {
+                    count++;
+                }
+            }
+
+            return count;
+        }
+
+        private static List<T> FindObjectsOfTypeAllIl2Cpp<T>() where T : UnityEngine.Object
+        {
+            return FindObjectsOfTypeAllIl2Cpp<T>(typeof(T));
+        }
+
+        private static List<T> FindObjectsOfTypeAllIl2Cpp<T>(Type type) where T : UnityEngine.Object
+        {
+            if (type == null)
+            {
+                return new List<T>();
+            }
+
+            Il2CppSystem.Type il2cppType = Il2CppInterop.Runtime.Il2CppType.From(type);
             UnityEngine.Object[] found = UnityEngine.Resources.FindObjectsOfTypeAll(il2cppType);
-            List<Component> results = new List<Component>(found.Length);
+            List<T> results = new List<T>(found.Length);
             foreach (UnityEngine.Object obj in found)
             {
-                if (obj is Component component)
+                if (obj is T casted)
                 {
-                    results.Add(component);
+                    results.Add(casted);
                 }
             }
 
