@@ -4,6 +4,7 @@ using System.Linq;
 using System.Reflection;
 using TLDAccessibility.A11y.Logging;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 using UnityEngine.UIElements;
 
@@ -16,6 +17,9 @@ namespace TLDAccessibility.A11y.UI
             public CandidateSnapshot(
                 int instanceId,
                 string hierarchyPath,
+                string componentType,
+                string gameObjectName,
+                string sceneName,
                 string text,
                 Color color,
                 float fontSize,
@@ -26,6 +30,9 @@ namespace TLDAccessibility.A11y.UI
             {
                 InstanceId = instanceId;
                 HierarchyPath = hierarchyPath;
+                ComponentType = componentType;
+                GameObjectName = gameObjectName;
+                SceneName = sceneName;
                 Text = text;
                 LogText = TrimText(text, 120);
                 Color = color;
@@ -38,6 +45,9 @@ namespace TLDAccessibility.A11y.UI
 
             public int InstanceId { get; }
             public string HierarchyPath { get; }
+            public string ComponentType { get; }
+            public string GameObjectName { get; }
+            public string SceneName { get; }
             public string Text { get; }
             public string LogText { get; }
             public Color Color { get; }
@@ -91,11 +101,38 @@ namespace TLDAccessibility.A11y.UI
             }
         }
 
+        private sealed class SceneScanResult
+        {
+            public int SceneCount { get; set; }
+            public List<string> SceneNames { get; } = new List<string>();
+            public int RootCount { get; set; }
+            public int TransformCount { get; set; }
+            public List<Component> TmpComponents { get; } = new List<Component>();
+            public List<Text> UiTextComponents { get; } = new List<Text>();
+            public List<Selectable> Selectables { get; } = new List<Selectable>();
+            public List<Canvas> Canvases { get; } = new List<Canvas>();
+            public List<UIDocument> UiDocuments { get; } = new List<UIDocument>();
+        }
+
         public SnapshotResult Capture(bool logDiagnostics = false)
         {
             List<CandidateSnapshot> candidates = new List<CandidateSnapshot>();
-            List<Component> tmpComponents = FindAllTmpTextComponents();
-            List<Text> uiTextComponents = FindObjectsOfTypeAllIl2Cpp<Text>();
+            SceneScanResult sceneScan = null;
+            List<Component> tmpComponents;
+            List<Text> uiTextComponents;
+
+            if (logDiagnostics)
+            {
+                sceneScan = ScanScenes();
+                tmpComponents = sceneScan.TmpComponents;
+                uiTextComponents = sceneScan.UiTextComponents;
+            }
+            else
+            {
+                tmpComponents = FindAllTmpTextComponents();
+                uiTextComponents = FindObjectsOfTypeAllIl2Cpp<Text>();
+            }
+
             bool useUiTextFallback = tmpComponents.Count == 0 && uiTextComponents.Count > 0;
 
             IEnumerable<Component> sourceComponents = tmpComponents;
@@ -120,7 +157,7 @@ namespace TLDAccessibility.A11y.UI
 
             if (logDiagnostics)
             {
-                UiToolkitSnapshot uiToolkitSnapshot = LogDiagnostics(tmpComponents, uiTextComponents, candidates);
+                UiToolkitSnapshot uiToolkitSnapshot = LogDiagnostics(sceneScan, tmpComponents, uiTextComponents, candidates);
                 return new SnapshotResult(candidates, uiToolkitSnapshot);
             }
 
@@ -233,10 +270,18 @@ namespace TLDAccessibility.A11y.UI
             int fontStyle = GetIntProperty(component, "fontStyle");
             Vector3 worldPosition = component.transform.position;
             string hierarchyPath = BuildHierarchyPath(component.transform);
+            string componentType = GetComponentTypeLabel(component);
+            string gameObjectName = component.gameObject != null ? component.gameObject.name : "(null)";
+            string sceneName = component.gameObject != null && component.gameObject.scene.IsValid()
+                ? component.gameObject.scene.name
+                : "(unknown)";
 
             candidate = new CandidateSnapshot(
                 component.GetInstanceID(),
                 hierarchyPath,
+                componentType,
+                gameObjectName,
+                sceneName,
                 text,
                 color,
                 fontSize,
@@ -310,7 +355,11 @@ namespace TLDAccessibility.A11y.UI
             return fallback;
         }
 
-        private static UiToolkitSnapshot LogDiagnostics(List<Component> tmpComponents, List<Text> uiTextComponents, List<CandidateSnapshot> candidates)
+        private static UiToolkitSnapshot LogDiagnostics(
+            SceneScanResult sceneScan,
+            List<Component> tmpComponents,
+            List<Text> uiTextComponents,
+            List<CandidateSnapshot> candidates)
         {
             List<Component> tmpAll = tmpComponents ?? FindAllTmpTextComponents();
             List<Text> uiTextAll = uiTextComponents ?? FindObjectsOfTypeAllIl2Cpp<Text>();
@@ -319,9 +368,16 @@ namespace TLDAccessibility.A11y.UI
             int uiTextFindObjectsCount = CountActiveInHierarchy(uiTextAll);
             int tmpFindObjectsAllCount = tmpAll.Count;
             int uiTextFindObjectsAllCount = uiTextAll.Count;
-            int selectableCount = FindObjectsOfTypeAllIl2Cpp<Selectable>().Count;
-            int canvasCount = FindObjectsOfTypeAllIl2Cpp<Canvas>().Count;
-            int transformCount = FindObjectsOfTypeAllIl2Cpp<Transform>().Count;
+            int selectableCount = sceneScan?.Selectables.Count ?? FindObjectsOfTypeAllIl2Cpp<Selectable>().Count;
+            int canvasCount = sceneScan?.Canvases.Count ?? FindObjectsOfTypeAllIl2Cpp<Canvas>().Count;
+            int transformCount = sceneScan?.TransformCount ?? FindObjectsOfTypeAllIl2Cpp<Transform>().Count;
+
+            if (sceneScan != null)
+            {
+                string sceneNames = sceneScan.SceneNames.Count > 0 ? string.Join(", ", sceneScan.SceneNames) : "(none)";
+                A11yLogger.Info($"MenuProbe scenes: count={sceneScan.SceneCount}, names=[{sceneNames}]");
+                A11yLogger.Info($"MenuProbe scenes: root objects total={sceneScan.RootCount}");
+            }
 
             A11yLogger.Info($"MenuProbe census: TMP total (active)={tmpFindObjectsCount}, TMP total (all)={tmpFindObjectsAllCount}, UI.Text total (active)={uiTextFindObjectsCount}, UI.Text total (all)={uiTextFindObjectsAllCount}, Selectable total (all)={selectableCount}, Canvas total (all)={canvasCount}");
             A11yLogger.Info($"MenuProbe sanity: Transform total={transformCount}");
@@ -349,7 +405,7 @@ namespace TLDAccessibility.A11y.UI
                 if (rawTextComponents.Count == 0)
                 {
                     A11yLogger.Info("MenuProbe census: no raw text components found (IL2CPP enumeration).");
-                    return CaptureUiToolkitSnapshot();
+                    return CaptureUiToolkitSnapshot(sceneScan?.UiDocuments);
                 }
 
                 int limit = Mathf.Min(rawTextComponents.Count, 20);
@@ -368,24 +424,24 @@ namespace TLDAccessibility.A11y.UI
                 }
             }
 
-            return CaptureUiToolkitSnapshot();
+            return CaptureUiToolkitSnapshot(sceneScan?.UiDocuments);
         }
 
-        private static UiToolkitSnapshot CaptureUiToolkitSnapshot()
+        private static UiToolkitSnapshot CaptureUiToolkitSnapshot(List<UIDocument> documents = null)
         {
-            List<UIDocument> documents = FindObjectsOfTypeAllIl2Cpp<UIDocument>();
-            int documentCount = documents?.Count ?? 0;
+            List<UIDocument> documentList = documents ?? FindObjectsOfTypeAllIl2Cpp<UIDocument>();
+            int documentCount = documentList?.Count ?? 0;
             A11yLogger.Info($"MenuProbe UI Toolkit census: UIDocument total={documentCount}");
 
             List<string> textCandidates = new List<string>();
             HashSet<string> uniqueTexts = new HashSet<string>();
 
-            if (documents == null || documents.Count == 0)
+            if (documentList == null || documentList.Count == 0)
             {
                 return new UiToolkitSnapshot(documentCount, textCandidates);
             }
 
-            foreach (UIDocument document in documents)
+            foreach (UIDocument document in documentList)
             {
                 if (document == null)
                 {
@@ -580,6 +636,80 @@ namespace TLDAccessibility.A11y.UI
             return FindObjectsOfTypeAllIl2Cpp<Component>(tmpType);
         }
 
+        private static SceneScanResult ScanScenes()
+        {
+            SceneScanResult result = new SceneScanResult();
+            int sceneCount = SceneManager.sceneCount;
+            result.SceneCount = sceneCount;
+
+            Type tmpType = TmpReflection.HasTmpText ? TmpReflection.TmpTextType : null;
+            for (int i = 0; i < sceneCount; i++)
+            {
+                Scene scene = SceneManager.GetSceneAt(i);
+                if (!scene.IsValid() || !scene.isLoaded)
+                {
+                    continue;
+                }
+
+                result.SceneNames.Add(scene.name);
+                GameObject[] roots = scene.GetRootGameObjects();
+                if (roots == null || roots.Length == 0)
+                {
+                    continue;
+                }
+
+                result.RootCount += roots.Length;
+                foreach (GameObject root in roots)
+                {
+                    if (root == null)
+                    {
+                        continue;
+                    }
+
+                    Transform[] transforms = root.GetComponentsInChildren<Transform>(true);
+                    if (transforms != null)
+                    {
+                        result.TransformCount += transforms.Length;
+                    }
+
+                    if (tmpType != null)
+                    {
+                        Component[] tmpFound = root.GetComponentsInChildren(tmpType, true);
+                        if (tmpFound != null && tmpFound.Length > 0)
+                        {
+                            result.TmpComponents.AddRange(tmpFound);
+                        }
+                    }
+
+                    Text[] uiTexts = root.GetComponentsInChildren<Text>(true);
+                    if (uiTexts != null && uiTexts.Length > 0)
+                    {
+                        result.UiTextComponents.AddRange(uiTexts);
+                    }
+
+                    Selectable[] selectables = root.GetComponentsInChildren<Selectable>(true);
+                    if (selectables != null && selectables.Length > 0)
+                    {
+                        result.Selectables.AddRange(selectables);
+                    }
+
+                    Canvas[] canvases = root.GetComponentsInChildren<Canvas>(true);
+                    if (canvases != null && canvases.Length > 0)
+                    {
+                        result.Canvases.AddRange(canvases);
+                    }
+
+                    UIDocument[] documents = root.GetComponentsInChildren<UIDocument>(true);
+                    if (documents != null && documents.Length > 0)
+                    {
+                        result.UiDocuments.AddRange(documents);
+                    }
+                }
+            }
+
+            return result;
+        }
+
         private static int CountActiveInHierarchy<T>(IEnumerable<T> components) where T : Component
         {
             if (components == null)
@@ -623,6 +753,26 @@ namespace TLDAccessibility.A11y.UI
             }
 
             return results;
+        }
+
+        private static string GetComponentTypeLabel(Component component)
+        {
+            if (component == null)
+            {
+                return "(null)";
+            }
+
+            if (TmpReflection.IsTmpText(component))
+            {
+                return "TMP_Text";
+            }
+
+            if (component is Text)
+            {
+                return "UI.Text";
+            }
+
+            return component.GetType().Name;
         }
 
         private static int GetIntProperty(Component component, string propertyName, int fallback = 0)

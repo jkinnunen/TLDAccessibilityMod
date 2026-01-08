@@ -188,12 +188,16 @@ namespace TLDAccessibility
 
             StringBuilder builder = new StringBuilder();
             builder.AppendLine("MenuProbe snapshot: top visible text candidates:");
-            int limit = Mathf.Min(15, ranked.Count);
+            int limit = Mathf.Min(10, ranked.Count);
             for (int i = 0; i < limit; i++)
             {
                 MenuProbe.CandidateSnapshot candidate = ranked[i].Candidate;
                 Vector3 position = candidate.WorldPosition;
-                builder.Append($"{i + 1}. \"{candidate.LogText}\" ");
+                builder.Append($"{i + 1}. type={candidate.ComponentType}; ");
+                builder.Append($"gameObject={candidate.GameObjectName}; ");
+                builder.Append($"scene={candidate.SceneName}; ");
+                builder.Append($"text=\"{candidate.LogText}\"; ");
+                builder.Append($"activeInHierarchy={candidate.ActiveInHierarchy}; ");
                 builder.Append($"Path={candidate.HierarchyPath}; ");
                 builder.Append($"Alpha={candidate.Color.a:0.00}; ");
                 builder.Append($"FontSize={candidate.FontSize:0.0}; ");
