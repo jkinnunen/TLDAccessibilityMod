@@ -147,9 +147,14 @@ namespace TLDAccessibility.A11y.UI
                 return false;
             }
 
-            if (component is Behaviour behaviour && !behaviour.isActiveAndEnabled)
+            Behaviour behaviour = null;
+            if (component is Behaviour candidateBehaviour)
             {
-                return false;
+                behaviour = candidateBehaviour;
+                if (!behaviour.isActiveAndEnabled)
+                {
+                    return false;
+                }
             }
 
             string text = VisibilityUtil.NormalizeText(TmpReflection.GetTmpTextValue(component));
