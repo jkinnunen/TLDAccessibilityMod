@@ -76,6 +76,51 @@ namespace TLDAccessibility.A11y.UI
             return rect.width > 1f && rect.height > 1f;
         }
 
+        public static bool TryGetGraphicVisibility(Graphic graphic, out bool passesVisibility, out bool passesMask)
+        {
+            passesVisibility = false;
+            passesMask = false;
+            if (graphic == null)
+            {
+                return false;
+            }
+
+            if (!graphic.enabled)
+            {
+                return false;
+            }
+
+            if (graphic.canvasRenderer != null && graphic.canvasRenderer.cull)
+            {
+                return false;
+            }
+
+            float alpha = GetEffectiveAlpha(graphic);
+            if (alpha <= AlphaThreshold)
+            {
+                return false;
+            }
+
+            if (!TryGetScreenRect(graphic.rectTransform, out Rect rect))
+            {
+                return false;
+            }
+
+            if (!IntersectsScreen(rect))
+            {
+                return false;
+            }
+
+            if (rect.width <= 1f || rect.height <= 1f)
+            {
+                return false;
+            }
+
+            passesVisibility = true;
+            passesMask = IsWithinMasks(graphic.rectTransform, rect);
+            return passesMask;
+        }
+
         public static bool TryGetScreenRect(RectTransform rectTransform, out Rect rect)
         {
             rect = Rect.zero;
