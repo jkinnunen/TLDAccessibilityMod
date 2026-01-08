@@ -5,6 +5,7 @@ using System.Reflection;
 using TLDAccessibility.A11y.Logging;
 using UnityEngine;
 using UnityEngine.UI;
+using UnityEngine.UIElements;
 
 namespace TLDAccessibility.A11y.UI
 {
@@ -49,14 +50,30 @@ namespace TLDAccessibility.A11y.UI
 
         internal sealed class SnapshotResult
         {
-            public SnapshotResult(IReadOnlyList<CandidateSnapshot> candidates)
+            public SnapshotResult(IReadOnlyList<CandidateSnapshot> candidates, UiToolkitSnapshot uiToolkitSnapshot)
             {
                 Candidates = candidates ?? Array.Empty<CandidateSnapshot>();
                 ById = Candidates.ToDictionary(candidate => candidate.InstanceId, candidate => candidate);
+                UiToolkitSnapshot = uiToolkitSnapshot;
             }
 
             public IReadOnlyList<CandidateSnapshot> Candidates { get; }
             public Dictionary<int, CandidateSnapshot> ById { get; }
+            public UiToolkitSnapshot UiToolkitSnapshot { get; }
+        }
+
+        internal sealed class UiToolkitSnapshot
+        {
+            public UiToolkitSnapshot(int documentCount, IReadOnlyList<string> textCandidates)
+            {
+                DocumentCount = documentCount;
+                TextCandidates = textCandidates ?? Array.Empty<string>();
+            }
+
+            public int DocumentCount { get; }
+            public IReadOnlyList<string> TextCandidates { get; }
+            public int TextCount => TextCandidates.Count;
+            public string FirstText => TextCandidates.Count > 0 ? TextCandidates[0] : string.Empty;
         }
 
         private sealed class FilterCounters
@@ -103,10 +120,11 @@ namespace TLDAccessibility.A11y.UI
 
             if (logDiagnostics)
             {
-                LogDiagnostics(tmpComponents, uiTextComponents, candidates);
+                UiToolkitSnapshot uiToolkitSnapshot = LogDiagnostics(tmpComponents, uiTextComponents, candidates);
+                return new SnapshotResult(candidates, uiToolkitSnapshot);
             }
 
-            return new SnapshotResult(candidates);
+            return new SnapshotResult(candidates, null);
         }
 
         public static float CalculateChangeScore(CandidateSnapshot previous, CandidateSnapshot current)
@@ -292,7 +310,7 @@ namespace TLDAccessibility.A11y.UI
             return fallback;
         }
 
-        private static void LogDiagnostics(List<Component> tmpComponents, List<Text> uiTextComponents, List<CandidateSnapshot> candidates)
+        private static UiToolkitSnapshot LogDiagnostics(List<Component> tmpComponents, List<Text> uiTextComponents, List<CandidateSnapshot> candidates)
         {
             int tmpFindObjectsCount = tmpComponents?.Count ?? 0;
             int uiTextFindObjectsCount = uiTextComponents?.Count ?? 0;
@@ -332,7 +350,7 @@ namespace TLDAccessibility.A11y.UI
                 if (rawTextComponents.Count == 0)
                 {
                     A11yLogger.Info("MenuProbe census: no raw text components found (FindObjectsOfTypeAll).");
-                    return;
+                    return CaptureUiToolkitSnapshot();
                 }
 
                 int limit = Mathf.Min(rawTextComponents.Count, 20);
@@ -350,6 +368,141 @@ namespace TLDAccessibility.A11y.UI
                     A11yLogger.Info($"MenuProbe census raw[{i + 1}]: type={typeLabel}, text=\"{text}\", activeInHierarchy={activeInHierarchy}, enabled={enabled}, color.a={color.a:0.###}, path={hierarchyPath}");
                 }
             }
+
+            return CaptureUiToolkitSnapshot();
+        }
+
+        private static UiToolkitSnapshot CaptureUiToolkitSnapshot()
+        {
+            UIDocument[] documents = UnityEngine.Resources.FindObjectsOfTypeAll<UIDocument>();
+            int documentCount = documents?.Length ?? 0;
+            A11yLogger.Info($"MenuProbe UI Toolkit census: UIDocument total={documentCount}");
+
+            List<string> textCandidates = new List<string>();
+            HashSet<string> uniqueTexts = new HashSet<string>();
+
+            if (documents == null || documents.Length == 0)
+            {
+                return new UiToolkitSnapshot(documentCount, textCandidates);
+            }
+
+            foreach (UIDocument document in documents)
+            {
+                if (document == null)
+                {
+                    continue;
+                }
+
+                string documentName = string.IsNullOrWhiteSpace(document.name) ? "(unnamed)" : document.name;
+                string gameObjectName = document.gameObject != null ? document.gameObject.name : "(null)";
+                VisualElement root = document.rootVisualElement;
+                if (root == null)
+                {
+                    A11yLogger.Info($"MenuProbe UI Toolkit snapshot: UIDocument name={documentName}, gameObject={gameObjectName}, rootVisualElement=null");
+                    continue;
+                }
+
+                int docTextCount = 0;
+                CollectUiToolkitText(root, textCandidates, uniqueTexts, ref docTextCount);
+                A11yLogger.Info($"MenuProbe UI Toolkit snapshot: UIDocument name={documentName}, gameObject={gameObjectName}, textCount={docTextCount}");
+            }
+
+            if (textCandidates.Count > 0)
+            {
+                int limit = Mathf.Min(10, textCandidates.Count);
+                A11yLogger.Info($"MenuProbe UI Toolkit snapshot: logging {limit} unique text samples.");
+                for (int i = 0; i < limit; i++)
+                {
+                    string text = TrimText(textCandidates[i], 120);
+                    A11yLogger.Info($"MenuProbe UI Toolkit snapshot text[{i + 1}]: \"{text}\"");
+                }
+            }
+
+            return new UiToolkitSnapshot(documentCount, textCandidates);
+        }
+
+        private static void CollectUiToolkitText(
+            VisualElement root,
+            List<string> textCandidates,
+            HashSet<string> uniqueTexts,
+            ref int docTextCount)
+        {
+            if (root == null)
+            {
+                return;
+            }
+
+            Stack<VisualElement> stack = new Stack<VisualElement>();
+            stack.Push(root);
+
+            while (stack.Count > 0)
+            {
+                VisualElement element = stack.Pop();
+                if (element == null)
+                {
+                    continue;
+                }
+
+                bool displayNone = element.resolvedStyle.display == DisplayStyle.None;
+                bool hidden = element.resolvedStyle.visibility == Visibility.Hidden;
+                if (!displayNone && !hidden)
+                {
+                    foreach (VisualElement child in element.Children())
+                    {
+                        stack.Push(child);
+                    }
+                }
+
+                if (displayNone || hidden)
+                {
+                    continue;
+                }
+
+                Rect worldBound = element.worldBound;
+                if (worldBound.width <= 0f || worldBound.height <= 0f)
+                {
+                    continue;
+                }
+
+                string text = GetUiToolkitTextValue(element);
+                string normalized = VisibilityUtil.NormalizeText(text);
+                if (string.IsNullOrWhiteSpace(normalized))
+                {
+                    continue;
+                }
+
+                docTextCount++;
+                if (uniqueTexts.Add(normalized))
+                {
+                    textCandidates.Add(normalized);
+                }
+            }
+        }
+
+        private static string GetUiToolkitTextValue(VisualElement element)
+        {
+            if (element == null)
+            {
+                return null;
+            }
+
+            if (element is Label label)
+            {
+                return label.text;
+            }
+
+            if (element is TextElement textElement)
+            {
+                return textElement.text;
+            }
+
+            PropertyInfo property = element.GetType().GetProperty("text", BindingFlags.Instance | BindingFlags.Public);
+            if (property?.PropertyType == typeof(string))
+            {
+                return property.GetValue(element) as string;
+            }
+
+            return null;
         }
 
         private static void AccumulateCounters(Component component, Func<Component, string> textResolver, FilterCounters counters)
