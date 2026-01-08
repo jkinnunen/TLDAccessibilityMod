@@ -11,7 +11,7 @@ namespace TLDAccessibility.A11y.Capture
 
         public static void HandleTextChange(Component component, string text)
         {
-            if (SpeechService == null || !Settings.instance.AutoSpeakTextChanges)
+            if (SpeechService == null || !Settings.Instance.AutoSpeakTextChanges)
             {
                 return;
             }
@@ -32,7 +32,7 @@ namespace TLDAccessibility.A11y.Capture
                 return;
             }
 
-            if (Settings.instance.SuppressNumericAutoSpeech && IsMostlyNumeric(normalized))
+            if (Settings.Instance.SuppressNumericAutoSpeech && IsMostlyNumeric(normalized))
             {
                 return;
             }

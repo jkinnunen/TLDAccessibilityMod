@@ -379,7 +379,7 @@ namespace TLDAccessibility.A11y.UI
 
         private static string ResolveInputValue(string text)
         {
-            switch (Settings.instance.Verbosity)
+            switch (Settings.Instance.Verbosity)
             {
                 case VerbosityLevel.Detailed:
                     return string.IsNullOrWhiteSpace(text) ? "empty" : text;

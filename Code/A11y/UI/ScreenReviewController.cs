@@ -182,7 +182,7 @@ namespace TLDAccessibility.A11y.UI
                 return;
             }
 
-            if (!VisibilityUtil.IsElementVisible(component, Settings.instance.AllowUnknownNguiInSnapshot))
+            if (!VisibilityUtil.IsElementVisible(component, Settings.Instance.AllowUnknownNguiInSnapshot))
             {
                 return;
             }

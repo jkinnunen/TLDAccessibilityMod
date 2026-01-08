@@ -32,7 +32,7 @@ namespace TLDAccessibility.A11y.UI
         public void HandleFocusChanged(GameObject current)
         {
             lastFocused = current;
-            if (!Settings.instance.AutoSpeakFocusChanges)
+            if (!Settings.Instance.AutoSpeakFocusChanges)
             {
                 return;
             }

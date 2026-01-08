@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Reflection;
 using HarmonyLib;
+using TLDAccessibility.A11y.Logging;
 using TLDAccessibility.A11y.UI;
 using UnityEngine.UI;
 
@@ -9,6 +10,9 @@ namespace TLDAccessibility.A11y.Capture
 {
     internal static class TextChangePatches
     {
+        private static bool loggedTmpSetTextMissing;
+        private static bool loggedTmpSetterMissing;
+
         public static void Apply(HarmonyLib.Harmony harmony)
         {
             if (harmony == null)
@@ -27,6 +31,23 @@ namespace TLDAccessibility.A11y.Capture
         [HarmonyPatch]
         private static class TmpTextSetTextPatch
         {
+            private static bool Prepare()
+            {
+                if (!TmpReflection.HasTmpText)
+                {
+                    LogTmpMissing(ref loggedTmpSetTextMissing, "TMP_Text type not found; skipping TMP SetText patches.");
+                    return false;
+                }
+
+                if (TmpReflection.GetTmpSetTextMethods().Count == 0)
+                {
+                    LogTmpMissing(ref loggedTmpSetTextMissing, "TMP_Text.SetText overloads not found; skipping TMP SetText patches.");
+                    return false;
+                }
+
+                return true;
+            }
+
             private static IEnumerable<MethodBase> TargetMethods()
             {
                 // Patch TMP_Text.SetText(string, ...) overloads to detect runtime text changes.
@@ -45,6 +66,23 @@ namespace TLDAccessibility.A11y.Capture
         [HarmonyPatch]
         private static class TmpTextSetterPatch
         {
+            private static bool Prepare()
+            {
+                if (!TmpReflection.HasTmpText)
+                {
+                    LogTmpMissing(ref loggedTmpSetterMissing, "TMP_Text type not found; skipping TMP text setter patch.");
+                    return false;
+                }
+
+                if (TmpReflection.GetTmpTextSetter() == null)
+                {
+                    LogTmpMissing(ref loggedTmpSetterMissing, "TMP_Text.text setter not found; skipping TMP text setter patch.");
+                    return false;
+                }
+
+                return true;
+            }
+
             private static MethodBase TargetMethod()
             {
                 // Patch TMP_Text.text setter for direct property assignments.
@@ -93,6 +131,17 @@ namespace TLDAccessibility.A11y.Capture
             {
                 TextChangeHandler.HandleTextChange(component, value);
             }
+        }
+
+        private static void LogTmpMissing(ref bool logged, string message)
+        {
+            if (logged)
+            {
+                return;
+            }
+
+            logged = true;
+            A11yLogger.Warning(message);
         }
     }
 }

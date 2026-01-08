@@ -43,7 +43,7 @@ namespace TLDAccessibility.A11y.Output
             }
 
             float now = Time.unscaledTime;
-            float minInterval = Settings.instance.MinIntervalSeconds;
+            float minInterval = Settings.Instance.MinIntervalSeconds;
             if (now - lastSpokenTime < minInterval)
             {
                 return;
@@ -66,7 +66,7 @@ namespace TLDAccessibility.A11y.Output
             }
 
             float now = Time.unscaledTime;
-            float cooldown = Settings.instance.CooldownSeconds;
+            float cooldown = Settings.Instance.CooldownSeconds;
             if (lastTextTimes.TryGetValue(text, out float lastTextTime) && now - lastTextTime < cooldown)
             {
                 return;
@@ -157,7 +157,7 @@ namespace TLDAccessibility.A11y.Output
                 recentAutoTimes.Dequeue();
             }
 
-            return recentAutoTimes.Count < Settings.instance.MaxAutoPerSecond;
+            return recentAutoTimes.Count < Settings.Instance.MaxAutoPerSecond;
         }
 
         private void Enqueue(SpokenItem item)
