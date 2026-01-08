@@ -6,6 +6,7 @@ using TLDAccessibility.A11y.Model;
 using TLDAccessibility.A11y.Output;
 using TLDAccessibility.A11y.UI;
 using UnityEngine;
+using UnityEngine.EventSystems;
 
 namespace TLDAccessibility
 {
@@ -53,6 +54,25 @@ namespace TLDAccessibility
             bool ctrl = Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl);
             bool alt = Input.GetKey(KeyCode.LeftAlt) || Input.GetKey(KeyCode.RightAlt);
             bool shift = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
+            if (ctrl && alt && shift && Input.GetKeyDown(KeyCode.F11))
+            {
+                GameObject selected = EventSystem.current?.currentSelectedGameObject;
+                if (selected == null)
+                {
+                    speechService?.Speak("No UI selection", A11ySpeechPriority.Critical, "ui_selected_hotkey", false);
+                    return;
+                }
+
+                string narration = focusTracker?.BuildUiSelectionNarration(selected);
+                if (string.IsNullOrWhiteSpace(narration))
+                {
+                    narration = selected.name;
+                }
+
+                speechService?.Speak(narration, A11ySpeechPriority.Critical, "ui_selected_hotkey", false);
+                return;
+            }
+
             if (ctrl && alt && shift && Input.GetKeyDown(KeyCode.F12))
             {
                 A11yLogger.Info("Debug speech hotkey pressed.");
