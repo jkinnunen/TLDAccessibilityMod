@@ -447,8 +447,10 @@ namespace TLDAccessibility.A11y.UI
                 bool hidden = element.resolvedStyle.visibility == Visibility.Hidden;
                 if (!displayNone && !hidden)
                 {
-                    foreach (VisualElement child in element.Children())
+                    var hierarchy = element.hierarchy;
+                    for (int i = 0; i < hierarchy.childCount; i++)
                     {
+                        VisualElement child = hierarchy.ElementAt(i);
                         stack.Push(child);
                     }
                 }
