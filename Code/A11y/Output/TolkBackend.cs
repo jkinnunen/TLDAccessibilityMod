@@ -7,6 +7,8 @@ namespace TLDAccessibility.A11y.Output
     internal sealed class TolkBackend : IA11ySpeechBackend
     {
         private bool isAvailable;
+        private bool isLoaded;
+        private bool screenReaderDetected;
 
         public TolkBackend()
         {
@@ -14,7 +16,8 @@ namespace TLDAccessibility.A11y.Output
             {
                 if (Tolk_Load())
                 {
-                    isAvailable = Tolk_IsLoaded();
+                    isLoaded = Tolk_IsLoaded();
+                    isAvailable = isLoaded;
                 }
                 else
                 {
@@ -37,11 +40,15 @@ namespace TLDAccessibility.A11y.Output
             }
             else
             {
+                screenReaderDetected = Tolk_DetectScreenReader();
+                A11yLogger.Info($"Tolk screen reader detected: {screenReaderDetected}");
                 A11yLogger.Info("Tolk backend initialized.");
             }
         }
 
         public bool IsAvailable => isAvailable;
+        public bool IsLoaded => isLoaded;
+        public bool ScreenReaderDetected => screenReaderDetected;
 
         public void Speak(string text)
         {
@@ -58,6 +65,27 @@ namespace TLDAccessibility.A11y.Output
             {
                 isAvailable = false;
                 A11yLogger.Warning($"Tolk speak failed: {ex.Message}");
+            }
+        }
+
+        public bool TrySpeak(string text, out Exception exception)
+        {
+            exception = null;
+            if (!isAvailable || string.IsNullOrWhiteSpace(text))
+            {
+                return false;
+            }
+
+            try
+            {
+                Tolk_Speak(text, true);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                isAvailable = false;
+                exception = ex;
+                return false;
             }
         }
 
@@ -82,5 +110,8 @@ namespace TLDAccessibility.A11y.Output
 
         [DllImport("Tolk", CallingConvention = CallingConvention.Cdecl)]
         private static extern void Tolk_Stop();
+
+        [DllImport("Tolk", CallingConvention = CallingConvention.Cdecl)]
+        private static extern bool Tolk_DetectScreenReader();
     }
 }

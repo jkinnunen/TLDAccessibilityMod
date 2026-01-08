@@ -34,6 +34,7 @@ namespace TLDAccessibility
             TextChangePatches.Apply(harmony);
 
             A11yLogger.Info("Accessibility layer initialized.");
+            speechService.RunStartupSelfTest();
         }
 
         public override void OnUpdate()
@@ -42,7 +43,22 @@ namespace TLDAccessibility
             focusTracker?.Update();
             TmpTextPolling.Update();
 
+            HandleDiagnosticHotkey();
             HandleHotkeys();
+        }
+
+        private void HandleDiagnosticHotkey()
+        {
+            bool ctrlDown = Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl);
+            bool altDown = Input.GetKey(KeyCode.LeftAlt) || Input.GetKey(KeyCode.RightAlt);
+            bool shiftDown = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
+
+            if (ctrlDown && altDown && shiftDown && Input.GetKeyDown(KeyCode.F12))
+            {
+                A11yLogger.Info("Speech test hotkey detected.");
+                speechService?.Speak("TLDAccessibility speech test hotkey.", A11ySpeechPriority.Normal, "hotkey_test", false);
+                A11yLogger.Info("Speech test hotkey output requested.");
+            }
         }
 
         private void HandleHotkeys()

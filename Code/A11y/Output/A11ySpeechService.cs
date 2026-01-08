@@ -35,6 +35,64 @@ namespace TLDAccessibility.A11y.Output
 
         public bool IsAvailable => primaryBackend.IsAvailable || (fallbackBackend?.IsAvailable ?? false);
 
+        public void RunStartupSelfTest()
+        {
+            const string testText = "TLDAccessibility loaded. Speech test.";
+            string primaryName = GetBackendName(primaryBackend);
+            A11yLogger.Info("Speech self-test starting.");
+            A11yLogger.Info($"Speech backend selected: {primaryName}");
+
+            bool usedFallback = false;
+            bool spoke = false;
+            Exception exception = null;
+            if (primaryBackend is TolkBackend tolkBackend)
+            {
+                A11yLogger.Info($"Tolk loaded: {tolkBackend.IsLoaded}");
+                A11yLogger.Info($"Tolk screen reader detected: {tolkBackend.ScreenReaderDetected}");
+
+                if (!tolkBackend.IsAvailable)
+                {
+                    spoke = false;
+                }
+                else if (!tolkBackend.ScreenReaderDetected)
+                {
+                    usedFallback = true;
+                    A11yLogger.Warning("Tolk screen reader not detected. Falling back to System.Speech for self-test.");
+                    spoke = TrySpeakWithSystemFallback(testText, out exception);
+                }
+                else
+                {
+                    spoke = tolkBackend.TrySpeak(testText, out exception);
+                    if (!spoke)
+                    {
+                        usedFallback = true;
+                        A11yLogger.Warning("Tolk output failed for self-test. Falling back to System.Speech.");
+                        spoke = TrySpeakWithSystemFallback(testText, out exception);
+                    }
+                }
+            }
+            else
+            {
+                IA11ySpeechBackend backend = primaryBackend.IsAvailable ? primaryBackend : fallbackBackend;
+                spoke = TrySpeakBackend(backend, testText, out exception);
+            }
+
+            if (exception != null)
+            {
+                A11yLogger.Warning($"Speech self-test exception: {exception.Message}");
+            }
+
+            if (spoke)
+            {
+                string usedBackend = usedFallback ? "System.Speech" : primaryName;
+                A11yLogger.Info($"Speech self-test completed using {usedBackend}.");
+            }
+            else
+            {
+                A11yLogger.Warning("Speech self-test failed to produce output.");
+            }
+        }
+
         public void Update()
         {
             if (queue.Count == 0)
@@ -134,7 +192,16 @@ namespace TLDAccessibility.A11y.Output
                 return;
             }
 
-            backend.Speak(item.Text);
+            try
+            {
+                backend.Speak(item.Text);
+            }
+            catch (Exception ex)
+            {
+                A11yLogger.Warning($"Speech output failed: {ex.Message}");
+                return;
+            }
+
             lastSpokenText = item.Text;
             lastSpokenTime = Time.unscaledTime;
             lastTextTimes[item.Text] = lastSpokenTime;
@@ -180,6 +247,54 @@ namespace TLDAccessibility.A11y.Output
             }
 
             return queue.Dequeue();
+        }
+
+        private static bool TrySpeakBackend(IA11ySpeechBackend backend, string text, out Exception exception)
+        {
+            exception = null;
+            if (backend == null || !backend.IsAvailable)
+            {
+                return false;
+            }
+
+            try
+            {
+                backend.Speak(text);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                exception = ex;
+                return false;
+            }
+        }
+
+        private static bool TrySpeakWithSystemFallback(string text, out Exception exception)
+        {
+            exception = null;
+            if (!OperatingSystem.IsWindows())
+            {
+                return false;
+            }
+
+            SystemSpeechBackend systemBackend = new SystemSpeechBackend();
+            if (!systemBackend.IsAvailable)
+            {
+                return false;
+            }
+
+            return TrySpeakBackend(systemBackend, text, out exception);
+        }
+
+        private static string GetBackendName(IA11ySpeechBackend backend)
+        {
+            return backend switch
+            {
+                TolkBackend => "Tolk",
+                SystemSpeechBackend => "System.Speech",
+                NullSpeechBackend => "None",
+                _ => backend?.GetType().Name ?? "None"
+            };
         }
     }
 }
