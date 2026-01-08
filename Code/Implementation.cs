@@ -5,6 +5,7 @@ using TLDAccessibility.A11y.Logging;
 using TLDAccessibility.A11y.Model;
 using TLDAccessibility.A11y.Output;
 using TLDAccessibility.A11y.UI;
+using System.Text;
 using UnityEngine;
 using UnityEngine.EventSystems;
 
@@ -56,20 +57,7 @@ namespace TLDAccessibility
             bool shift = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
             if (ctrl && alt && shift && Input.GetKeyDown(KeyCode.F11))
             {
-                GameObject selected = EventSystem.current?.currentSelectedGameObject;
-                if (selected == null)
-                {
-                    speechService?.Speak("No UI selection", A11ySpeechPriority.Critical, "ui_selected_hotkey", false);
-                    return;
-                }
-
-                string narration = focusTracker?.BuildUiSelectionNarration(selected);
-                if (string.IsNullOrWhiteSpace(narration))
-                {
-                    narration = selected.name;
-                }
-
-                speechService?.Speak(narration, A11ySpeechPriority.Critical, "ui_selected_hotkey", false);
+                HandleSelectionSnapshotHotkey();
                 return;
             }
 
@@ -78,6 +66,101 @@ namespace TLDAccessibility
                 A11yLogger.Info("Debug speech hotkey pressed.");
                 speechService?.Speak("TLDAccessibility debug hotkey speech test.", A11ySpeechPriority.Critical, "debug_hotkey", false);
             }
+        }
+
+        private void HandleSelectionSnapshotHotkey()
+        {
+            A11yLogger.Info("Selection snapshot hotkey pressed.");
+            EventSystem eventSystem = EventSystem.current;
+            if (eventSystem == null)
+            {
+                A11yLogger.Info("Selection snapshot: EventSystem is null.");
+                speechService?.Speak("EventSystem is null", A11ySpeechPriority.Critical, "ui_selection_snapshot", false);
+                return;
+            }
+
+            GameObject selected = eventSystem.currentSelectedGameObject;
+            if (selected == null)
+            {
+                A11yLogger.Info("Selection snapshot: No selected UI object.");
+                speechService?.Speak("No selected UI object", A11ySpeechPriority.Critical, "ui_selection_snapshot", false);
+                return;
+            }
+
+            string narration = focusTracker?.BuildUiSelectionNarration(selected);
+            if (string.IsNullOrWhiteSpace(narration))
+            {
+                narration = selected.name;
+            }
+
+            speechService?.Speak($"Selected: {narration}", A11ySpeechPriority.Critical, "ui_selection_snapshot", false);
+            string details = BuildSelectionSnapshotDetails(selected, narration);
+            A11yLogger.Info(details);
+        }
+
+        private static string BuildSelectionSnapshotDetails(GameObject selected, string narration)
+        {
+            StringBuilder builder = new StringBuilder();
+            string sceneName = selected.scene.IsValid() ? selected.scene.name : "(unknown)";
+            builder.Append("Selection snapshot: ");
+            builder.Append($"Name={selected.name}; ");
+            builder.Append($"ActiveInHierarchy={selected.activeInHierarchy}; ");
+            builder.Append($"Scene={sceneName}; ");
+
+            Component[] components = selected.GetComponents<Component>();
+            int limit = Mathf.Min(components.Length, 8);
+            builder.Append("Components=[");
+            int appended = 0;
+            for (int i = 0; i < limit; i++)
+            {
+                Component component = components[i];
+                if (component == null)
+                {
+                    continue;
+                }
+
+                if (appended > 0)
+                {
+                    builder.Append(", ");
+                }
+
+                builder.Append(component.GetType().Name);
+                appended++;
+            }
+
+            if (components.Length > limit)
+            {
+                builder.Append(", ...");
+            }
+
+            builder.Append("]; ");
+
+            Component tmpText = TmpReflection.GetTmpTextComponent(selected);
+            if (tmpText != null)
+            {
+                string text = VisibilityUtil.NormalizeText(TmpReflection.GetTmpTextValue(tmpText));
+                text = TrimSnapshotText(text);
+                builder.Append($"TMP_Text=\"{text}\"; ");
+            }
+
+            builder.Append($"Narration=\"{narration}\"");
+            return builder.ToString();
+        }
+
+        private static string TrimSnapshotText(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return string.Empty;
+            }
+
+            const int maxLength = 120;
+            if (text.Length <= maxLength)
+            {
+                return text;
+            }
+
+            return $"{text.Substring(0, maxLength)}...";
         }
 
         private void HandleHotkeys()

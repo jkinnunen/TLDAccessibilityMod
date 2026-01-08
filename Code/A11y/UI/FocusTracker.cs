@@ -23,10 +23,21 @@ namespace TLDAccessibility.A11y.UI
         public void Update()
         {
             EventSystem eventSystem = EventSystem.current;
-            GameObject current = eventSystem != null ? eventSystem.currentSelectedGameObject : null;
+            if (eventSystem == null)
+            {
+                return;
+            }
+
+            GameObject current = eventSystem.currentSelectedGameObject;
+            if (current == null)
+            {
+                lastSelected = null;
+                return;
+            }
+
             if (current != lastSelected)
             {
-                HandleUiSelectionChanged(current);
+                HandleUiSelectionChanged(lastSelected, current);
             }
         }
 
@@ -107,7 +118,7 @@ namespace TLDAccessibility.A11y.UI
             return $"focus_{target.GetInstanceID()}";
         }
 
-        private void HandleUiSelectionChanged(GameObject current)
+        private void HandleUiSelectionChanged(GameObject previous, GameObject current)
         {
             lastSelected = current;
             if (current != null)
@@ -116,18 +127,12 @@ namespace TLDAccessibility.A11y.UI
             }
 
             string spokenText = BuildUiSelectionNarration(current);
-            string name = current != null ? current.name : "None";
-            A11yLogger.Info($"UI selected changed: {name} -> {spokenText ?? "none"}");
+            string previousName = previous != null ? previous.name : "None";
+            string currentName = current != null ? current.name : "None";
+            A11yLogger.Info($"UI selection changed: {previousName} -> {currentName}");
 
-            if (!Settings.Instance.AutoSpeakFocusChanges)
-            {
-                return;
-            }
-
-            if (!string.IsNullOrWhiteSpace(spokenText))
-            {
-                speechService.Speak(spokenText, A11ySpeechPriority.Normal, "ui_selected", true);
-            }
+            string narration = string.IsNullOrWhiteSpace(spokenText) ? currentName : spokenText;
+            speechService.Speak($"Selected: {narration}", A11ySpeechPriority.Normal, "ui_selected", true);
         }
 
         private static string ResolveSelectionText(GameObject target)

@@ -9,6 +9,7 @@ namespace TLDAccessibility.A11y.Output
     internal sealed class TolkBackend : IA11ySpeechBackend
     {
         private bool isAvailable;
+        private bool stopFailureLogged;
 
         public TolkBackend()
         {
@@ -97,7 +98,19 @@ namespace TLDAccessibility.A11y.Output
                 return;
             }
 
-            Tolk_Stop();
+            A11yLogger.Info("Tolk stop requested.");
+            try
+            {
+                Tolk_Silence();
+            }
+            catch (Exception ex)
+            {
+                if (!stopFailureLogged)
+                {
+                    stopFailureLogged = true;
+                    A11yLogger.Warning($"Tolk silence failed: {ex.Message}");
+                }
+            }
         }
 
         [DllImport("Tolk", CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Unicode)]
@@ -116,7 +129,7 @@ namespace TLDAccessibility.A11y.Output
         private static extern bool Tolk_TrySAPI(bool trySapi);
 
         [DllImport("Tolk", CallingConvention = CallingConvention.Cdecl)]
-        private static extern void Tolk_Stop();
+        private static extern bool Tolk_Silence();
 
         private static string DetectScreenReader()
         {
