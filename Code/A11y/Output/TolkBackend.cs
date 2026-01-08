@@ -1,4 +1,6 @@
 using System;
+using System.IO;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using TLDAccessibility.A11y.Logging;
 
@@ -12,9 +14,28 @@ namespace TLDAccessibility.A11y.Output
         {
             try
             {
+                string modDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+                string currentPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+                if (!string.IsNullOrWhiteSpace(modDir))
+                {
+                    string updatedPath = $"{modDir};{currentPath}";
+                    Environment.SetEnvironmentVariable("PATH", updatedPath);
+                    A11yLogger.Info($"Tolk PATH prepended with mod directory: {modDir}");
+                }
+
+                A11yLogger.Info($"Tolk current directory: {Environment.CurrentDirectory}");
+
                 if (Tolk_Load())
                 {
                     isAvailable = Tolk_IsLoaded();
+                    if (isAvailable)
+                    {
+                        bool sapiEnabled = Tolk_TrySAPI(true);
+                        A11yLogger.Info($"Tolk SAPI try enabled: {sapiEnabled}");
+
+                        string screenReader = DetectScreenReader();
+                        A11yLogger.Info($"Tolk detected screen reader: {screenReader}");
+                    }
                 }
                 else
                 {
@@ -43,21 +64,29 @@ namespace TLDAccessibility.A11y.Output
 
         public bool IsAvailable => isAvailable;
 
-        public void Speak(string text)
+        public bool Speak(string text)
         {
             if (!isAvailable || string.IsNullOrWhiteSpace(text))
             {
-                return;
+                return false;
             }
 
             try
             {
-                Tolk_Speak(text, true);
+                bool success = Tolk_Output(text, true);
+                if (!success)
+                {
+                    isAvailable = false;
+                    A11yLogger.Warning("Tolk output returned false.");
+                }
+
+                return success;
             }
             catch (Exception ex)
             {
                 isAvailable = false;
                 A11yLogger.Warning($"Tolk speak failed: {ex.Message}");
+                return false;
             }
         }
 
@@ -78,9 +107,22 @@ namespace TLDAccessibility.A11y.Output
         private static extern bool Tolk_IsLoaded();
 
         [DllImport("Tolk", CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Unicode)]
-        private static extern bool Tolk_Speak(string text, bool interrupt);
+        private static extern bool Tolk_Output(string text, bool interrupt);
+
+        [DllImport("Tolk", CallingConvention = CallingConvention.Cdecl)]
+        private static extern IntPtr Tolk_DetectScreenReader();
+
+        [DllImport("Tolk", CallingConvention = CallingConvention.Cdecl)]
+        private static extern bool Tolk_TrySAPI(bool trySapi);
 
         [DllImport("Tolk", CallingConvention = CallingConvention.Cdecl)]
         private static extern void Tolk_Stop();
+
+        private static string DetectScreenReader()
+        {
+            IntPtr result = Tolk_DetectScreenReader();
+            string name = result == IntPtr.Zero ? null : Marshal.PtrToStringUni(result);
+            return string.IsNullOrWhiteSpace(name) ? "(none)" : name;
+        }
     }
 }

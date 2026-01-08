@@ -36,15 +36,16 @@ namespace TLDAccessibility.A11y.Output
 
         public bool IsAvailable => isAvailable;
 
-        public void Speak(string text)
+        public bool Speak(string text)
         {
             if (!isAvailable || string.IsNullOrWhiteSpace(text))
             {
-                return;
+                return false;
             }
 
             synthesizer.SpeakAsyncCancelAll();
             synthesizer.SpeakAsync(text);
+            return true;
         }
 
         public void Stop()
