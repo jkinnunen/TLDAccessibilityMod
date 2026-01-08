@@ -156,9 +156,22 @@ namespace TLDAccessibility
             }
 
             MenuProbe.SnapshotResult snapshot = menuProbe.Capture(true);
+            MenuProbe.UiToolkitSnapshot uiToolkitSnapshot = snapshot.UiToolkitSnapshot;
+            if (uiToolkitSnapshot != null && uiToolkitSnapshot.TextCount > 0)
+            {
+                string firstText = uiToolkitSnapshot.FirstText;
+                string spokenText = string.IsNullOrWhiteSpace(firstText)
+                    ? $"MenuProbe: UI Toolkit found {uiToolkitSnapshot.TextCount} text nodes."
+                    : $"MenuProbe: UI Toolkit found {uiToolkitSnapshot.TextCount} text nodes. First: {firstText}";
+                speechService?.Speak(spokenText, A11ySpeechPriority.Critical, "menu_probe_ui_toolkit_snapshot", false);
+            }
             if (snapshot.Candidates.Count == 0)
             {
                 A11yLogger.Info("MenuProbe snapshot: no visible text candidates.");
+                if (uiToolkitSnapshot == null || uiToolkitSnapshot.TextCount == 0)
+                {
+                    A11yLogger.Info("MenuProbe snapshot: no UI Toolkit text candidates either.");
+                }
                 speechService?.Speak("MenuProbe: no visible text candidates", A11ySpeechPriority.Critical, "menu_probe_snapshot", false);
                 return;
             }
