@@ -1,46 +1,23 @@
+using System;
 using System.Collections.Generic;
-using ModSettings;
+using MelonLoader;
 using TLDAccessibility.A11y.Logging;
 using TLDAccessibility.A11y.Model;
 using TLDAccessibility.A11y.UI;
 
 namespace TLDAccessibility
 {
-    internal class Settings : JsonModSettings
+    internal sealed class Settings
     {
-        internal static Settings instance = new Settings();
+        private const string CategoryName = "TLDAccessibility";
 
-        [Name("Auto speak focus changes")]
-        [Description("Speak when UI focus changes.")]
-        public bool AutoSpeakFocusChanges = true;
+        internal static Settings Instance => EnsureInitialized();
 
-        [Name("Auto speak text changes")]
-        [Description("Speak visible text changes (may be chatty).")]
-        public bool AutoSpeakTextChanges = false;
-
-        [Name("Suppress numeric auto speech")]
-        [Description("Suppress auto speaking numeric-only text changes.")]
-        public bool SuppressNumericAutoSpeech = true;
-
-        [Name("Cooldown seconds")]
-        [Description("Minimum seconds before repeating the same text.")]
-        public float CooldownSeconds = 1.0f;
-
-        [Name("Min interval seconds")]
-        [Description("Minimum interval between any spoken phrases.")]
-        public float MinIntervalSeconds = 0.2f;
-
-        [Name("Max auto speech per second")]
-        [Description("Rate limit for auto narration.")]
-        public int MaxAutoPerSecond = 3;
-
-        [Name("Verbosity")]
-        [Description("Detail level for spoken content.")]
-        public VerbosityLevel Verbosity = VerbosityLevel.Normal;
-
-        [Name("Allow unknown NGUI visibility in snapshot")]
-        [Description("Include NGUI labels in screen review even when visibility is uncertain.")]
-        public bool AllowUnknownNguiInSnapshot = true;
+        private static Settings instance;
+        private static Settings fallback;
+        private static bool initialized;
+        private static bool loggedInitFailure;
+        private static bool loggedSaveFailure;
 
         private static readonly Dictionary<string, string> DefaultHotkeys = new Dictionary<string, string>
         {
@@ -57,47 +34,335 @@ namespace TLDAccessibility
         };
 
         private static readonly HashSet<string> LoggedInvalidHotkeys = new HashSet<string>();
+
         private readonly Dictionary<string, HotkeyCacheEntry> hotkeyCache = new Dictionary<string, HotkeyCacheEntry>();
 
-        [Name("Hotkey: Speak focus")]
-        [Description("Speak the currently focused UI element.")]
-        public string SpeakFocus = "F6";
+        private MelonPreferences_Category category;
 
-        [Name("Hotkey: Read screen")]
-        [Description("Begin screen review for visible UI elements.")]
-        public string ReadScreen = "F7";
+        private MelonPreferences_Entry<bool> autoSpeakFocusChangesEntry;
+        private MelonPreferences_Entry<bool> autoSpeakTextChangesEntry;
+        private MelonPreferences_Entry<bool> suppressNumericAutoSpeechEntry;
+        private MelonPreferences_Entry<float> cooldownSecondsEntry;
+        private MelonPreferences_Entry<float> minIntervalSecondsEntry;
+        private MelonPreferences_Entry<int> maxAutoPerSecondEntry;
+        private MelonPreferences_Entry<int> verbosityEntry;
+        private MelonPreferences_Entry<bool> allowUnknownNguiInSnapshotEntry;
+        private MelonPreferences_Entry<string> speakFocusEntry;
+        private MelonPreferences_Entry<string> readScreenEntry;
+        private MelonPreferences_Entry<string> exitReviewEntry;
+        private MelonPreferences_Entry<string> nextItemEntry;
+        private MelonPreferences_Entry<string> previousItemEntry;
+        private MelonPreferences_Entry<string> readAllEntry;
+        private MelonPreferences_Entry<string> activateEntry;
+        private MelonPreferences_Entry<string> repeatLastEntry;
+        private MelonPreferences_Entry<string> stopSpeakingEntry;
+        private MelonPreferences_Entry<string> toggleFocusAutoSpeakEntry;
 
-        [Name("Hotkey: Exit screen review")]
-        [Description("Exit screen review and return to normal focus mode.")]
-        public string ExitReview = "Escape";
+        private bool autoSpeakFocusChanges = true;
+        private bool autoSpeakTextChanges;
+        private bool suppressNumericAutoSpeech = true;
+        private float cooldownSeconds = 1.0f;
+        private float minIntervalSeconds = 0.2f;
+        private int maxAutoPerSecond = 3;
+        private int verbosity = (int)VerbosityLevel.Normal;
+        private bool allowUnknownNguiInSnapshot = true;
+        private string speakFocus = "F6";
+        private string readScreen = "F7";
+        private string exitReview = "Escape";
+        private string nextItem = "F8";
+        private string previousItem = "F9";
+        private string readAll = "F10";
+        private string activate = "Return";
+        private string repeatLast = "F11";
+        private string stopSpeaking = "F12";
+        private string toggleFocusAutoSpeak = "F5";
 
-        [Name("Hotkey: Next item")]
-        [Description("Move to the next screen review item.")]
-        public string NextItem = "F8";
+        internal static Settings Initialize()
+        {
+            if (initialized)
+            {
+                return instance ?? GetFallback();
+            }
 
-        [Name("Hotkey: Previous item")]
-        [Description("Move to the previous screen review item.")]
-        public string PreviousItem = "F9";
+            initialized = true;
 
-        [Name("Hotkey: Read all")]
-        [Description("Read all items in screen review order.")]
-        public string ReadAll = "F10";
+            try
+            {
+                instance = new Settings(usePreferences: true);
+            }
+            catch (Exception ex)
+            {
+                if (!loggedInitFailure)
+                {
+                    loggedInitFailure = true;
+                    A11yLogger.Error($"Settings failed to initialize. Using defaults. {ex}");
+                }
 
-        [Name("Hotkey: Activate")]
-        [Description("Activate the currently focused UI element.")]
-        public string Activate = "Return";
+                instance = GetFallback();
+            }
 
-        [Name("Hotkey: Repeat last")]
-        [Description("Repeat the last spoken line.")]
-        public string RepeatLast = "F11";
+            return instance ?? GetFallback();
+        }
 
-        [Name("Hotkey: Stop speaking")]
-        [Description("Stop current speech output.")]
-        public string StopSpeaking = "F12";
+        public void Save()
+        {
+            if (category == null)
+            {
+                return;
+            }
 
-        [Name("Hotkey: Toggle focus auto-speak")]
-        [Description("Toggle automatic speaking when focus changes.")]
-        public string ToggleFocusAutoSpeak = "F5";
+            try
+            {
+                MelonPreferences.Save();
+            }
+            catch (Exception ex)
+            {
+                if (!loggedSaveFailure)
+                {
+                    loggedSaveFailure = true;
+                    A11yLogger.Warning($"Failed to save settings. {ex}");
+                }
+            }
+        }
+
+        public bool AutoSpeakFocusChanges
+        {
+            get => autoSpeakFocusChangesEntry?.Value ?? autoSpeakFocusChanges;
+            set
+            {
+                autoSpeakFocusChanges = value;
+                if (autoSpeakFocusChangesEntry != null)
+                {
+                    autoSpeakFocusChangesEntry.Value = value;
+                }
+            }
+        }
+
+        public bool AutoSpeakTextChanges
+        {
+            get => autoSpeakTextChangesEntry?.Value ?? autoSpeakTextChanges;
+            set
+            {
+                autoSpeakTextChanges = value;
+                if (autoSpeakTextChangesEntry != null)
+                {
+                    autoSpeakTextChangesEntry.Value = value;
+                }
+            }
+        }
+
+        public bool SuppressNumericAutoSpeech
+        {
+            get => suppressNumericAutoSpeechEntry?.Value ?? suppressNumericAutoSpeech;
+            set
+            {
+                suppressNumericAutoSpeech = value;
+                if (suppressNumericAutoSpeechEntry != null)
+                {
+                    suppressNumericAutoSpeechEntry.Value = value;
+                }
+            }
+        }
+
+        public float CooldownSeconds
+        {
+            get => cooldownSecondsEntry?.Value ?? cooldownSeconds;
+            set
+            {
+                cooldownSeconds = value;
+                if (cooldownSecondsEntry != null)
+                {
+                    cooldownSecondsEntry.Value = value;
+                }
+            }
+        }
+
+        public float MinIntervalSeconds
+        {
+            get => minIntervalSecondsEntry?.Value ?? minIntervalSeconds;
+            set
+            {
+                minIntervalSeconds = value;
+                if (minIntervalSecondsEntry != null)
+                {
+                    minIntervalSecondsEntry.Value = value;
+                }
+            }
+        }
+
+        public int MaxAutoPerSecond
+        {
+            get => maxAutoPerSecondEntry?.Value ?? maxAutoPerSecond;
+            set
+            {
+                maxAutoPerSecond = value;
+                if (maxAutoPerSecondEntry != null)
+                {
+                    maxAutoPerSecondEntry.Value = value;
+                }
+            }
+        }
+
+        public VerbosityLevel Verbosity
+        {
+            get
+            {
+                int value = verbosityEntry?.Value ?? verbosity;
+                return Enum.IsDefined(typeof(VerbosityLevel), value) ? (VerbosityLevel)value : VerbosityLevel.Normal;
+            }
+            set
+            {
+                int intValue = (int)value;
+                verbosity = intValue;
+                if (verbosityEntry != null)
+                {
+                    verbosityEntry.Value = intValue;
+                }
+            }
+        }
+
+        public bool AllowUnknownNguiInSnapshot
+        {
+            get => allowUnknownNguiInSnapshotEntry?.Value ?? allowUnknownNguiInSnapshot;
+            set
+            {
+                allowUnknownNguiInSnapshot = value;
+                if (allowUnknownNguiInSnapshotEntry != null)
+                {
+                    allowUnknownNguiInSnapshotEntry.Value = value;
+                }
+            }
+        }
+
+        public string SpeakFocus
+        {
+            get => speakFocusEntry?.Value ?? speakFocus;
+            set
+            {
+                speakFocus = value;
+                if (speakFocusEntry != null)
+                {
+                    speakFocusEntry.Value = value;
+                }
+            }
+        }
+
+        public string ReadScreen
+        {
+            get => readScreenEntry?.Value ?? readScreen;
+            set
+            {
+                readScreen = value;
+                if (readScreenEntry != null)
+                {
+                    readScreenEntry.Value = value;
+                }
+            }
+        }
+
+        public string ExitReview
+        {
+            get => exitReviewEntry?.Value ?? exitReview;
+            set
+            {
+                exitReview = value;
+                if (exitReviewEntry != null)
+                {
+                    exitReviewEntry.Value = value;
+                }
+            }
+        }
+
+        public string NextItem
+        {
+            get => nextItemEntry?.Value ?? nextItem;
+            set
+            {
+                nextItem = value;
+                if (nextItemEntry != null)
+                {
+                    nextItemEntry.Value = value;
+                }
+            }
+        }
+
+        public string PreviousItem
+        {
+            get => previousItemEntry?.Value ?? previousItem;
+            set
+            {
+                previousItem = value;
+                if (previousItemEntry != null)
+                {
+                    previousItemEntry.Value = value;
+                }
+            }
+        }
+
+        public string ReadAll
+        {
+            get => readAllEntry?.Value ?? readAll;
+            set
+            {
+                readAll = value;
+                if (readAllEntry != null)
+                {
+                    readAllEntry.Value = value;
+                }
+            }
+        }
+
+        public string Activate
+        {
+            get => activateEntry?.Value ?? activate;
+            set
+            {
+                activate = value;
+                if (activateEntry != null)
+                {
+                    activateEntry.Value = value;
+                }
+            }
+        }
+
+        public string RepeatLast
+        {
+            get => repeatLastEntry?.Value ?? repeatLast;
+            set
+            {
+                repeatLast = value;
+                if (repeatLastEntry != null)
+                {
+                    repeatLastEntry.Value = value;
+                }
+            }
+        }
+
+        public string StopSpeaking
+        {
+            get => stopSpeakingEntry?.Value ?? stopSpeaking;
+            set
+            {
+                stopSpeaking = value;
+                if (stopSpeakingEntry != null)
+                {
+                    stopSpeakingEntry.Value = value;
+                }
+            }
+        }
+
+        public string ToggleFocusAutoSpeak
+        {
+            get => toggleFocusAutoSpeakEntry?.Value ?? toggleFocusAutoSpeak;
+            set
+            {
+                toggleFocusAutoSpeak = value;
+                if (toggleFocusAutoSpeakEntry != null)
+                {
+                    toggleFocusAutoSpeakEntry.Value = value;
+                }
+            }
+        }
 
         internal HotkeyBinding SpeakFocusBinding => GetHotkeyBinding(nameof(SpeakFocus), SpeakFocus);
         internal HotkeyBinding ReadScreenBinding => GetHotkeyBinding(nameof(ReadScreen), ReadScreen);
@@ -110,6 +375,75 @@ namespace TLDAccessibility
         internal HotkeyBinding StopSpeakingBinding => GetHotkeyBinding(nameof(StopSpeaking), StopSpeaking);
         internal HotkeyBinding ToggleFocusAutoSpeakBinding => GetHotkeyBinding(nameof(ToggleFocusAutoSpeak), ToggleFocusAutoSpeak);
 
+        private static Settings EnsureInitialized()
+        {
+            if (instance != null)
+            {
+                return instance;
+            }
+
+            return Initialize();
+        }
+
+        private static Settings GetFallback()
+        {
+            fallback ??= new Settings(usePreferences: false);
+            return fallback;
+        }
+
+        private Settings(bool usePreferences)
+        {
+            if (usePreferences)
+            {
+                InitializePreferences();
+            }
+        }
+
+        private void InitializePreferences()
+        {
+            category = MelonPreferences.CreateCategory(CategoryName);
+
+            autoSpeakFocusChangesEntry = category.CreateEntry(nameof(AutoSpeakFocusChanges), autoSpeakFocusChanges);
+            autoSpeakTextChangesEntry = category.CreateEntry(nameof(AutoSpeakTextChanges), autoSpeakTextChanges);
+            suppressNumericAutoSpeechEntry = category.CreateEntry(nameof(SuppressNumericAutoSpeech), suppressNumericAutoSpeech);
+            cooldownSecondsEntry = category.CreateEntry(nameof(CooldownSeconds), cooldownSeconds);
+            minIntervalSecondsEntry = category.CreateEntry(nameof(MinIntervalSeconds), minIntervalSeconds);
+            maxAutoPerSecondEntry = category.CreateEntry(nameof(MaxAutoPerSecond), maxAutoPerSecond);
+            verbosityEntry = category.CreateEntry(nameof(Verbosity), verbosity);
+            allowUnknownNguiInSnapshotEntry = category.CreateEntry(nameof(AllowUnknownNguiInSnapshot), allowUnknownNguiInSnapshot);
+
+            speakFocusEntry = category.CreateEntry(nameof(SpeakFocus), speakFocus);
+            readScreenEntry = category.CreateEntry(nameof(ReadScreen), readScreen);
+            exitReviewEntry = category.CreateEntry(nameof(ExitReview), exitReview);
+            nextItemEntry = category.CreateEntry(nameof(NextItem), nextItem);
+            previousItemEntry = category.CreateEntry(nameof(PreviousItem), previousItem);
+            readAllEntry = category.CreateEntry(nameof(ReadAll), readAll);
+            activateEntry = category.CreateEntry(nameof(Activate), activate);
+            repeatLastEntry = category.CreateEntry(nameof(RepeatLast), repeatLast);
+            stopSpeakingEntry = category.CreateEntry(nameof(StopSpeaking), stopSpeaking);
+            toggleFocusAutoSpeakEntry = category.CreateEntry(nameof(ToggleFocusAutoSpeak), toggleFocusAutoSpeak);
+
+            autoSpeakFocusChanges = autoSpeakFocusChangesEntry.Value;
+            autoSpeakTextChanges = autoSpeakTextChangesEntry.Value;
+            suppressNumericAutoSpeech = suppressNumericAutoSpeechEntry.Value;
+            cooldownSeconds = cooldownSecondsEntry.Value;
+            minIntervalSeconds = minIntervalSecondsEntry.Value;
+            maxAutoPerSecond = maxAutoPerSecondEntry.Value;
+            verbosity = verbosityEntry.Value;
+            allowUnknownNguiInSnapshot = allowUnknownNguiInSnapshotEntry.Value;
+
+            speakFocus = speakFocusEntry.Value;
+            readScreen = readScreenEntry.Value;
+            exitReview = exitReviewEntry.Value;
+            nextItem = nextItemEntry.Value;
+            previousItem = previousItemEntry.Value;
+            readAll = readAllEntry.Value;
+            activate = activateEntry.Value;
+            repeatLast = repeatLastEntry.Value;
+            stopSpeaking = stopSpeakingEntry.Value;
+            toggleFocusAutoSpeak = toggleFocusAutoSpeakEntry.Value;
+        }
+
         private HotkeyBinding GetHotkeyBinding(string settingName, string value)
         {
             if (hotkeyCache.TryGetValue(settingName, out HotkeyCacheEntry cache) && cache.Value == value)
@@ -119,8 +453,8 @@ namespace TLDAccessibility
 
             if (!HotkeyUtil.TryParse(value, out HotkeyBinding binding))
             {
-                string fallback = DefaultHotkeys[settingName];
-                if (!HotkeyUtil.TryParse(fallback, out binding))
+                string fallbackValue = DefaultHotkeys[settingName];
+                if (!HotkeyUtil.TryParse(fallbackValue, out binding))
                 {
                     binding = HotkeyBinding.None;
                 }
@@ -128,7 +462,7 @@ namespace TLDAccessibility
                 if (LoggedInvalidHotkeys.Add(settingName))
                 {
                     string displayValue = string.IsNullOrWhiteSpace(value) ? "<empty>" : value;
-                    A11yLogger.Warning($"Hotkey setting '{settingName}' is invalid ('{displayValue}'). Falling back to '{fallback}'.");
+                    A11yLogger.Warning($"Hotkey setting '{settingName}' is invalid ('{displayValue}'). Falling back to '{fallbackValue}'.");
                 }
             }
 

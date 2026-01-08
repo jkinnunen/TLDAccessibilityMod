@@ -16,12 +16,13 @@ namespace TLDAccessibility
         private ScreenReviewController screenReview;
         private HarmonyLib.Harmony harmony;
         private bool loggedSettingsUnavailable;
+        private Settings settings;
 
         public override void OnInitializeMelon()
         {
-            Settings.instance.AddToModSettings(BuildInfo.Name);
             A11yLogger.Initialize(LoggerInstance);
             LoggerInstance.Msg($"Version {BuildInfo.Version}");
+            settings = Settings.Initialize();
 
             speechService = new A11ySpeechService();
             focusTracker = new FocusTracker(speechService);
@@ -46,8 +47,8 @@ namespace TLDAccessibility
 
         private void HandleHotkeys()
         {
-            Settings settings = Settings.instance;
-            if (settings == null)
+            Settings activeSettings = settings ?? Settings.Instance;
+            if (activeSettings == null)
             {
                 if (!loggedSettingsUnavailable)
                 {
@@ -58,55 +59,56 @@ namespace TLDAccessibility
                 return;
             }
 
-            if (HotkeyUtil.IsPressed(settings.SpeakFocusBinding))
+            if (HotkeyUtil.IsPressed(activeSettings.SpeakFocusBinding))
             {
                 SpeakFocusNow();
             }
 
-            if (HotkeyUtil.IsPressed(settings.ReadScreenBinding))
+            if (HotkeyUtil.IsPressed(activeSettings.ReadScreenBinding))
             {
                 screenReview.EnterOrRefresh();
             }
 
-            if (HotkeyUtil.IsPressed(settings.ExitReviewBinding))
+            if (HotkeyUtil.IsPressed(activeSettings.ExitReviewBinding))
             {
                 screenReview.Exit();
             }
 
-            if (HotkeyUtil.IsPressed(settings.NextItemBinding))
+            if (HotkeyUtil.IsPressed(activeSettings.NextItemBinding))
             {
                 screenReview.Next();
             }
 
-            if (HotkeyUtil.IsPressed(settings.PreviousItemBinding))
+            if (HotkeyUtil.IsPressed(activeSettings.PreviousItemBinding))
             {
                 screenReview.Previous();
             }
 
-            if (HotkeyUtil.IsPressed(settings.ReadAllBinding))
+            if (HotkeyUtil.IsPressed(activeSettings.ReadAllBinding))
             {
                 screenReview.ReadAll();
             }
 
-            if (HotkeyUtil.IsPressed(settings.ActivateBinding))
+            if (HotkeyUtil.IsPressed(activeSettings.ActivateBinding))
             {
                 ActivateCurrent();
             }
 
-            if (HotkeyUtil.IsPressed(settings.RepeatLastBinding))
+            if (HotkeyUtil.IsPressed(activeSettings.RepeatLastBinding))
             {
                 speechService?.RepeatLast();
             }
 
-            if (HotkeyUtil.IsPressed(settings.StopSpeakingBinding))
+            if (HotkeyUtil.IsPressed(activeSettings.StopSpeakingBinding))
             {
                 speechService?.Stop();
             }
 
-            if (HotkeyUtil.IsPressed(settings.ToggleFocusAutoSpeakBinding))
+            if (HotkeyUtil.IsPressed(activeSettings.ToggleFocusAutoSpeakBinding))
             {
-                settings.AutoSpeakFocusChanges = !settings.AutoSpeakFocusChanges;
-                string state = settings.AutoSpeakFocusChanges ? "on" : "off";
+                activeSettings.AutoSpeakFocusChanges = !activeSettings.AutoSpeakFocusChanges;
+                activeSettings.Save();
+                string state = activeSettings.AutoSpeakFocusChanges ? "on" : "off";
                 speechService?.Speak($"Focus auto speak {state}", A11ySpeechPriority.Normal, "toggle_focus", false);
             }
         }
