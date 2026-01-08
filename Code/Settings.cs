@@ -1,6 +1,8 @@
+using System.Collections.Generic;
 using ModSettings;
+using TLDAccessibility.A11y.Logging;
 using TLDAccessibility.A11y.Model;
-using UnityEngine;
+using TLDAccessibility.A11y.UI;
 
 namespace TLDAccessibility
 {
@@ -40,46 +42,111 @@ namespace TLDAccessibility
         [Description("Include NGUI labels in screen review even when visibility is uncertain.")]
         public bool AllowUnknownNguiInSnapshot = true;
 
-        // ModSettings keybinds store a primary KeyCode plus Ctrl/Alt/Shift modifiers.
-        // HotkeyUtil reads these bindings via Input to detect presses.
+        private static readonly Dictionary<string, string> DefaultHotkeys = new Dictionary<string, string>
+        {
+            { nameof(SpeakFocus), "F6" },
+            { nameof(ReadScreen), "F7" },
+            { nameof(ExitReview), "Escape" },
+            { nameof(NextItem), "F8" },
+            { nameof(PreviousItem), "F9" },
+            { nameof(ReadAll), "F10" },
+            { nameof(Activate), "Return" },
+            { nameof(RepeatLast), "F11" },
+            { nameof(StopSpeaking), "F12" },
+            { nameof(ToggleFocusAutoSpeak), "F5" }
+        };
+
+        private static readonly HashSet<string> LoggedInvalidHotkeys = new HashSet<string>();
+        private readonly Dictionary<string, HotkeyCacheEntry> hotkeyCache = new Dictionary<string, HotkeyCacheEntry>();
+
         [Name("Hotkey: Speak focus")]
         [Description("Speak the currently focused UI element.")]
-        public Keybind SpeakFocus = new Keybind(KeyCode.F6);
+        public string SpeakFocus = "F6";
 
         [Name("Hotkey: Read screen")]
         [Description("Begin screen review for visible UI elements.")]
-        public Keybind ReadScreen = new Keybind(KeyCode.F7);
+        public string ReadScreen = "F7";
 
         [Name("Hotkey: Exit screen review")]
         [Description("Exit screen review and return to normal focus mode.")]
-        public Keybind ExitReview = new Keybind(KeyCode.Escape);
+        public string ExitReview = "Escape";
 
         [Name("Hotkey: Next item")]
         [Description("Move to the next screen review item.")]
-        public Keybind NextItem = new Keybind(KeyCode.F8);
+        public string NextItem = "F8";
 
         [Name("Hotkey: Previous item")]
         [Description("Move to the previous screen review item.")]
-        public Keybind PreviousItem = new Keybind(KeyCode.F9);
+        public string PreviousItem = "F9";
 
         [Name("Hotkey: Read all")]
         [Description("Read all items in screen review order.")]
-        public Keybind ReadAll = new Keybind(KeyCode.F10);
+        public string ReadAll = "F10";
 
         [Name("Hotkey: Activate")]
         [Description("Activate the currently focused UI element.")]
-        public Keybind Activate = new Keybind(KeyCode.Return);
+        public string Activate = "Return";
 
         [Name("Hotkey: Repeat last")]
         [Description("Repeat the last spoken line.")]
-        public Keybind RepeatLast = new Keybind(KeyCode.F11);
+        public string RepeatLast = "F11";
 
         [Name("Hotkey: Stop speaking")]
         [Description("Stop current speech output.")]
-        public Keybind StopSpeaking = new Keybind(KeyCode.F12);
+        public string StopSpeaking = "F12";
 
         [Name("Hotkey: Toggle focus auto-speak")]
         [Description("Toggle automatic speaking when focus changes.")]
-        public Keybind ToggleFocusAutoSpeak = new Keybind(KeyCode.F5);
+        public string ToggleFocusAutoSpeak = "F5";
+
+        internal HotkeyBinding SpeakFocusBinding => GetHotkeyBinding(nameof(SpeakFocus), SpeakFocus);
+        internal HotkeyBinding ReadScreenBinding => GetHotkeyBinding(nameof(ReadScreen), ReadScreen);
+        internal HotkeyBinding ExitReviewBinding => GetHotkeyBinding(nameof(ExitReview), ExitReview);
+        internal HotkeyBinding NextItemBinding => GetHotkeyBinding(nameof(NextItem), NextItem);
+        internal HotkeyBinding PreviousItemBinding => GetHotkeyBinding(nameof(PreviousItem), PreviousItem);
+        internal HotkeyBinding ReadAllBinding => GetHotkeyBinding(nameof(ReadAll), ReadAll);
+        internal HotkeyBinding ActivateBinding => GetHotkeyBinding(nameof(Activate), Activate);
+        internal HotkeyBinding RepeatLastBinding => GetHotkeyBinding(nameof(RepeatLast), RepeatLast);
+        internal HotkeyBinding StopSpeakingBinding => GetHotkeyBinding(nameof(StopSpeaking), StopSpeaking);
+        internal HotkeyBinding ToggleFocusAutoSpeakBinding => GetHotkeyBinding(nameof(ToggleFocusAutoSpeak), ToggleFocusAutoSpeak);
+
+        private HotkeyBinding GetHotkeyBinding(string settingName, string value)
+        {
+            if (hotkeyCache.TryGetValue(settingName, out HotkeyCacheEntry cache) && cache.Value == value)
+            {
+                return cache.Binding;
+            }
+
+            if (!HotkeyUtil.TryParse(value, out HotkeyBinding binding))
+            {
+                string fallback = DefaultHotkeys[settingName];
+                if (!HotkeyUtil.TryParse(fallback, out binding))
+                {
+                    binding = HotkeyBinding.None;
+                }
+
+                if (LoggedInvalidHotkeys.Add(settingName))
+                {
+                    string displayValue = string.IsNullOrWhiteSpace(value) ? "<empty>" : value;
+                    A11yLogger.Warning($"Hotkey setting '{settingName}' is invalid ('{displayValue}'). Falling back to '{fallback}'.");
+                }
+            }
+
+            hotkeyCache[settingName] = new HotkeyCacheEntry(value, binding);
+            return binding;
+        }
+
+        private sealed class HotkeyCacheEntry
+        {
+            public HotkeyCacheEntry(string value, HotkeyBinding binding)
+            {
+                Value = value;
+                Binding = binding;
+            }
+
+            public string Value { get; }
+
+            public HotkeyBinding Binding { get; }
+        }
     }
 }
