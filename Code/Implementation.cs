@@ -5,10 +5,12 @@ using TLDAccessibility.A11y.Logging;
 using TLDAccessibility.A11y.Model;
 using TLDAccessibility.A11y.Output;
 using TLDAccessibility.A11y.UI;
+using System;
 using System.Collections.Generic;
 using System.Text;
 using UnityEngine;
 using UnityEngine.EventSystems;
+using UnityEngine.SceneManagement;
 
 namespace TLDAccessibility
 {
@@ -150,62 +152,73 @@ namespace TLDAccessibility
 
         private void HandleMenuProbeSnapshotHotkey()
         {
-            if (menuProbe == null)
+            try
             {
-                return;
-            }
+                A11yLogger.Info("[TLDAccessibility] MenuProbe DEEP CENSUS MARKER v1 (F10 handler entered)");
+                string sceneName = SceneManager.GetActiveScene().name;
+                A11yLogger.Info($"[TLDAccessibility] MenuProbe marker: scene={sceneName} time={Time.unscaledTime}");
 
-            MenuProbe.SnapshotResult snapshot = menuProbe.Capture(true);
-            MenuProbe.UiToolkitSnapshot uiToolkitSnapshot = snapshot.UiToolkitSnapshot;
-            if (uiToolkitSnapshot != null && uiToolkitSnapshot.TextCount > 0)
-            {
-                string firstText = uiToolkitSnapshot.FirstText;
-                string spokenText = string.IsNullOrWhiteSpace(firstText)
-                    ? $"MenuProbe: UI Toolkit found {uiToolkitSnapshot.TextCount} text nodes."
-                    : $"MenuProbe: UI Toolkit found {uiToolkitSnapshot.TextCount} text nodes. First: {firstText}";
-                speechService?.Speak(spokenText, A11ySpeechPriority.Critical, "menu_probe_ui_toolkit_snapshot", false);
-            }
-            if (snapshot.Candidates.Count == 0)
-            {
-                A11yLogger.Info("MenuProbe snapshot: no visible text candidates.");
-                if (uiToolkitSnapshot == null || uiToolkitSnapshot.TextCount == 0)
+                if (menuProbe == null)
                 {
-                    A11yLogger.Info("MenuProbe snapshot: no UI Toolkit text candidates either.");
+                    return;
                 }
-                speechService?.Speak("MenuProbe: no visible text candidates", A11ySpeechPriority.Critical, "menu_probe_snapshot", false);
-                return;
-            }
 
-            List<(MenuProbe.CandidateSnapshot Candidate, float Score)> ranked = new List<(MenuProbe.CandidateSnapshot, float)>();
-            foreach (MenuProbe.CandidateSnapshot candidate in snapshot.Candidates)
+                MenuProbe.SnapshotResult snapshot = menuProbe.Capture(true);
+                MenuProbe.UiToolkitSnapshot uiToolkitSnapshot = snapshot.UiToolkitSnapshot;
+                if (uiToolkitSnapshot != null && uiToolkitSnapshot.TextCount > 0)
+                {
+                    string firstText = uiToolkitSnapshot.FirstText;
+                    string spokenText = string.IsNullOrWhiteSpace(firstText)
+                        ? $"MenuProbe: UI Toolkit found {uiToolkitSnapshot.TextCount} text nodes."
+                        : $"MenuProbe: UI Toolkit found {uiToolkitSnapshot.TextCount} text nodes. First: {firstText}";
+                    speechService?.Speak(spokenText, A11ySpeechPriority.Critical, "menu_probe_ui_toolkit_snapshot", false);
+                }
+                if (snapshot.Candidates.Count == 0)
+                {
+                    A11yLogger.Info("MenuProbe snapshot: no visible text candidates.");
+                    if (uiToolkitSnapshot == null || uiToolkitSnapshot.TextCount == 0)
+                    {
+                        A11yLogger.Info("MenuProbe snapshot: no UI Toolkit text candidates either.");
+                    }
+                    speechService?.Speak("MenuProbe: no visible text candidates", A11ySpeechPriority.Critical, "menu_probe_snapshot", false);
+                    return;
+                }
+
+                List<(MenuProbe.CandidateSnapshot Candidate, float Score)> ranked = new List<(MenuProbe.CandidateSnapshot, float)>();
+                foreach (MenuProbe.CandidateSnapshot candidate in snapshot.Candidates)
+                {
+                    ranked.Add((candidate, MenuProbe.CalculateProminenceScore(candidate)));
+                }
+
+                ranked.Sort((left, right) => right.Score.CompareTo(left.Score));
+                MenuProbe.CandidateSnapshot topCandidate = ranked[0].Candidate;
+                speechService?.Speak($"MenuProbe: top candidate: {topCandidate.LogText}", A11ySpeechPriority.Critical, "menu_probe_snapshot", false);
+
+                StringBuilder builder = new StringBuilder();
+                builder.AppendLine("MenuProbe snapshot: top visible text candidates:");
+                int limit = Mathf.Min(10, ranked.Count);
+                for (int i = 0; i < limit; i++)
+                {
+                    MenuProbe.CandidateSnapshot candidate = ranked[i].Candidate;
+                    Vector3 position = candidate.WorldPosition;
+                    builder.Append($"{i + 1}. type={candidate.ComponentType}; ");
+                    builder.Append($"gameObject={candidate.GameObjectName}; ");
+                    builder.Append($"scene={candidate.SceneName}; ");
+                    builder.Append($"text=\"{candidate.LogText}\"; ");
+                    builder.Append($"activeInHierarchy={candidate.ActiveInHierarchy}; ");
+                    builder.Append($"Path={candidate.HierarchyPath}; ");
+                    builder.Append($"Alpha={candidate.Color.a:0.00}; ");
+                    builder.Append($"FontSize={candidate.FontSize:0.0}; ");
+                    builder.Append($"FontStyle={candidate.FontStyle}; ");
+                    builder.AppendLine($"Position=({position.x:0.00}, {position.y:0.00}, {position.z:0.00})");
+                }
+
+                A11yLogger.Info(builder.ToString());
+            }
+            catch (Exception ex)
             {
-                ranked.Add((candidate, MenuProbe.CalculateProminenceScore(candidate)));
+                A11yLogger.Info($"[TLDAccessibility] MenuProbe marker: exception: {ex}");
             }
-
-            ranked.Sort((left, right) => right.Score.CompareTo(left.Score));
-            MenuProbe.CandidateSnapshot topCandidate = ranked[0].Candidate;
-            speechService?.Speak($"MenuProbe: top candidate: {topCandidate.LogText}", A11ySpeechPriority.Critical, "menu_probe_snapshot", false);
-
-            StringBuilder builder = new StringBuilder();
-            builder.AppendLine("MenuProbe snapshot: top visible text candidates:");
-            int limit = Mathf.Min(10, ranked.Count);
-            for (int i = 0; i < limit; i++)
-            {
-                MenuProbe.CandidateSnapshot candidate = ranked[i].Candidate;
-                Vector3 position = candidate.WorldPosition;
-                builder.Append($"{i + 1}. type={candidate.ComponentType}; ");
-                builder.Append($"gameObject={candidate.GameObjectName}; ");
-                builder.Append($"scene={candidate.SceneName}; ");
-                builder.Append($"text=\"{candidate.LogText}\"; ");
-                builder.Append($"activeInHierarchy={candidate.ActiveInHierarchy}; ");
-                builder.Append($"Path={candidate.HierarchyPath}; ");
-                builder.Append($"Alpha={candidate.Color.a:0.00}; ");
-                builder.Append($"FontSize={candidate.FontSize:0.0}; ");
-                builder.Append($"FontStyle={candidate.FontStyle}; ");
-                builder.AppendLine($"Position=({position.x:0.00}, {position.y:0.00}, {position.z:0.00})");
-            }
-
-            A11yLogger.Info(builder.ToString());
         }
 
         private void HandleSelectionSnapshotHotkey()
