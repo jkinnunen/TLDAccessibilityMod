@@ -320,6 +320,7 @@ namespace TLDAccessibility
         private static void LogMenuProbeDiagnostics()
         {
             LogEventSystemDiagnostics();
+            LogCameraCensus();
             List<Transform> transforms = FindAllTransforms();
             LogSceneDistribution(transforms);
             LogComponentHistogramAndKeywords(transforms);
@@ -435,20 +436,35 @@ namespace TLDAccessibility
             HashSet<string> keywordMatches = new HashSet<string>(StringComparer.Ordinal);
             string[] keywords =
             {
+                "tmpro",
+                "tmp",
+                "textmesh",
+                "gui",
+                "ongui",
+                "imgui",
                 "label",
-                "button",
                 "menu",
-                "ui",
-                "text",
-                "localiz",
-                "ngui",
                 "panel",
+                "button",
+                "select",
+                "ngui",
                 "widget",
                 "sprite",
-                "select"
+                "coherent",
+                "web",
+                "html",
+                "browser",
+                "localiz",
+                "uix",
+                "ui",
+                "screen",
+                "front"
             };
 
             int totalComponents = 0;
+            int tmpComponentCount = 0;
+            int textMeshComponentCount = 0;
+            int nguiComponentCount = 0;
             for (int i = 0; i < transforms.Count; i++)
             {
                 Transform transform = transforms[i];
@@ -480,6 +496,21 @@ namespace TLDAccessibility
                     else
                     {
                         histogram[typeName] = 1;
+                    }
+
+                    if (typeName.Contains("TMPro", StringComparison.Ordinal) || typeName.Contains("TMP_", StringComparison.Ordinal))
+                    {
+                        tmpComponentCount++;
+                    }
+
+                    if (typeName.Contains("TextMesh", StringComparison.Ordinal))
+                    {
+                        textMeshComponentCount++;
+                    }
+
+                    if (IsNguiComponentName(typeName))
+                    {
+                        nguiComponentCount++;
                     }
 
                     string lower = typeName.ToLowerInvariant();
@@ -519,10 +550,40 @@ namespace TLDAccessibility
                 A11yLogger.Info("MenuProbe diagnostics: (other component types omitted)");
             }
 
+            A11yLogger.Info($"MenuProbe diagnostics: explicit counters TMP/TMPro={tmpComponentCount}, TextMesh={textMeshComponentCount}, NGUI/UI={nguiComponentCount}");
+
             List<string> keywordList = new List<string>(keywordMatches);
-            keywordList.Sort(StringComparer.OrdinalIgnoreCase);
-            string keywordSummary = keywordList.Count > 0 ? string.Join(", ", keywordList) : "(none)";
-            A11yLogger.Info($"MenuProbe diagnostics: keyword component types ({keywordList.Count})=[{keywordSummary}]");
+            List<KeyValuePair<string, int>> keywordEntries = new List<KeyValuePair<string, int>>(keywordList.Count);
+            for (int i = 0; i < keywordList.Count; i++)
+            {
+                string typeName = keywordList[i];
+                if (histogram.TryGetValue(typeName, out int count))
+                {
+                    keywordEntries.Add(new KeyValuePair<string, int>(typeName, count));
+                }
+                else
+                {
+                    keywordEntries.Add(new KeyValuePair<string, int>(typeName, 0));
+                }
+            }
+
+            keywordEntries.Sort((left, right) =>
+            {
+                int compare = right.Value.CompareTo(left.Value);
+                if (compare != 0)
+                {
+                    return compare;
+                }
+
+                return string.Compare(left.Key, right.Key, StringComparison.OrdinalIgnoreCase);
+            });
+
+            A11yLogger.Info($"MenuProbe diagnostics: keyword component types matches={keywordEntries.Count}");
+            for (int i = 0; i < keywordEntries.Count; i++)
+            {
+                KeyValuePair<string, int> entry = keywordEntries[i];
+                A11yLogger.Info($"MenuProbe diagnostics keyword[{i + 1}]: {entry.Key}={entry.Value}");
+            }
         }
 
         private static string GetIl2CppTypeName(Component component)
@@ -547,6 +608,63 @@ namespace TLDAccessibility
             }
 
             return "(unknown)";
+        }
+
+        private static bool IsNguiComponentName(string typeName)
+        {
+            if (string.IsNullOrEmpty(typeName))
+            {
+                return false;
+            }
+
+            if (typeName.Contains("NGUI", StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            int lastDot = typeName.LastIndexOf('.');
+            string shortName = lastDot >= 0 ? typeName.Substring(lastDot + 1) : typeName;
+            if (shortName == "UILabel" || shortName == "UIPanel" || shortName == "UIWidget" || shortName == "UIButton")
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        private static void LogCameraCensus()
+        {
+            Il2CppSystem.Type cameraType = Il2CppInterop.Runtime.Il2CppType.Of<Camera>();
+            UnityEngine.Object[] found = Resources.FindObjectsOfTypeAll(cameraType);
+            if (found == null)
+            {
+                A11yLogger.Info("MenuProbe diagnostics: camera census unavailable (no cameras).");
+                return;
+            }
+
+            int cameraCount = 0;
+            for (int i = 0; i < found.Length; i++)
+            {
+                if (found[i] is Camera)
+                {
+                    cameraCount++;
+                }
+            }
+
+            A11yLogger.Info($"MenuProbe diagnostics: camera census total={cameraCount}");
+            int index = 0;
+            for (int i = 0; i < found.Length; i++)
+            {
+                if (found[i] is Camera camera)
+                {
+                    index++;
+                    GameObject cameraObject = camera.gameObject;
+                    string name = cameraObject != null ? cameraObject.name : "(null)";
+                    bool activeInHierarchy = cameraObject != null && cameraObject.activeInHierarchy;
+                    A11yLogger.Info(
+                        $"MenuProbe diagnostics camera[{index}]: name={name}, enabled={camera.enabled}, activeInHierarchy={activeInHierarchy}, depth={camera.depth:0.###}, cullingMask={camera.cullingMask}, clearFlags={camera.clearFlags}");
+                }
+            }
         }
 
         private void HandleHotkeys()
