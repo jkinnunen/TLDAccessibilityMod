@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Reflection;
 using HarmonyLib;
 using TLDAccessibility.A11y.Logging;
+using TLDAccessibility.A11y.Model;
 using TLDAccessibility.A11y.Output;
 using UnityEngine;
 
@@ -350,7 +351,7 @@ namespace TLDAccessibility.A11y.UI
                 return null;
             }
 
-            UnityEngine.Object[] found = Resources.FindObjectsOfTypeAll(type);
+            UnityEngine.Object[] found = Resources.FindObjectsOfTypeAll(Il2CppInterop.Runtime.Il2CppType.From(type));
             if (found == null)
             {
                 return null;
