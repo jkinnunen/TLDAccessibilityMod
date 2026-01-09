@@ -54,6 +54,7 @@ namespace TLDAccessibility.A11y.UI
         private static bool uiLabelTextExceptionLogged;
         private static readonly HashSet<string> uiLabelTargetExceptionCallSites = new HashSet<string>();
         private static readonly HashSet<int> loggedLocalizeLabels = new HashSet<int>();
+        private static bool nonUILabelLogged;
 
         internal readonly struct UiCameraStatus
         {
@@ -134,7 +135,7 @@ namespace TLDAccessibility.A11y.UI
 
         public static bool IsLabel(Component component)
         {
-            return GetComponentTypeName(component) == UILabelTypeName;
+            return IsUILabelComponent(component);
         }
 
         public static Type GetUILabelType()
@@ -268,8 +269,9 @@ namespace TLDAccessibility.A11y.UI
                 return false;
             }
 
-            if (!IsLabel(component))
+            if (!IsUILabelComponent(component))
             {
+                LogNonUILabelOnce(component);
                 return false;
             }
 
@@ -284,15 +286,15 @@ namespace TLDAccessibility.A11y.UI
                     return true;
                 }
 
-                Type type = component.GetType();
-                EnsureUILabelMembers();
-                PropertyInfo textProperty = ResolveProperty(type, uiLabelTextProperty, "text");
-                FieldInfo textField = ResolveField(type, uiLabelTextField, "text");
-                rawText = ConvertToString(ReadMemberValue(component, type, textProperty, textField));
+                Type runtimeType = component.GetType();
+                Type labelType = GetUILabelType();
+                PropertyInfo textProperty = GetUILabelProperty(runtimeType, labelType, "text");
+                FieldInfo textField = GetUILabelField(runtimeType, labelType, "text");
+                rawText = ConvertToString(ReadMemberValue(component, runtimeType, textProperty, textField));
 
-                PropertyInfo processedProperty = ResolveProperty(type, uiLabelProcessedTextProperty, "processedText");
-                FieldInfo processedField = ResolveField(type, uiLabelProcessedTextField, "processedText");
-                processedText = ConvertToString(ReadMemberValue(component, type, processedProperty, processedField));
+                PropertyInfo processedProperty = GetUILabelProperty(runtimeType, labelType, "processedText");
+                FieldInfo processedField = GetUILabelField(runtimeType, labelType, "processedText");
+                processedText = ConvertToString(ReadMemberValue(component, runtimeType, processedProperty, processedField));
 
                 localizeTerm = GetUILocalizeTerm(component.gameObject);
                 return true;
@@ -346,6 +348,48 @@ namespace TLDAccessibility.A11y.UI
             uiLabelWorldCornersProperty = type.GetProperty("worldCorners", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
             uiLabelWorldCornersField = type.GetField("worldCorners", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
             uiLabelMembersCached = true;
+        }
+
+        private static PropertyInfo GetUILabelProperty(Type runtimeType, Type labelType, string name)
+        {
+            if (runtimeType == null)
+            {
+                return null;
+            }
+
+            PropertyInfo property = runtimeType.GetProperty(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            if (property != null)
+            {
+                return property;
+            }
+
+            if (labelType != null && labelType != runtimeType)
+            {
+                return labelType.GetProperty(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            }
+
+            return null;
+        }
+
+        private static FieldInfo GetUILabelField(Type runtimeType, Type labelType, string name)
+        {
+            if (runtimeType == null)
+            {
+                return null;
+            }
+
+            FieldInfo field = runtimeType.GetField(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            if (field != null)
+            {
+                return field;
+            }
+
+            if (labelType != null && labelType != runtimeType)
+            {
+                return labelType.GetField(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            }
+
+            return null;
         }
 
         private static object ReadMemberValue(Component component, Type componentType, PropertyInfo property, FieldInfo field)
@@ -673,6 +717,36 @@ namespace TLDAccessibility.A11y.UI
         private static bool IsButton(Component component)
         {
             return GetComponentTypeName(component) == UIButtonTypeName;
+        }
+
+        private static bool IsUILabelComponent(Component component)
+        {
+            if (component == null)
+            {
+                return false;
+            }
+
+            string name = GetComponentTypeName(component);
+            if (string.Equals(name, UILabelTypeName, StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            Type labelType = GetUILabelType();
+            Type runtimeType = component.GetType();
+            return labelType != null && labelType.IsAssignableFrom(runtimeType);
+        }
+
+        private static void LogNonUILabelOnce(Component component)
+        {
+            if (nonUILabelLogged)
+            {
+                return;
+            }
+
+            nonUILabelLogged = true;
+            string typeName = component != null ? component.GetType().Name : "(null)";
+            A11yLogger.Info($"NGUI: UILabel text lookup skipped for non-UILabel component type={typeName}.");
         }
 
         private static string GetComponentTypeName(Component component)
