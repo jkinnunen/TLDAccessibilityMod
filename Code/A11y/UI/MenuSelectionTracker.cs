@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Reflection;
 using HarmonyLib;
+using Harmony = HarmonyLib.Harmony;
 using TLDAccessibility.A11y.Logging;
 using TLDAccessibility.A11y.Output;
 using UnityEngine;
