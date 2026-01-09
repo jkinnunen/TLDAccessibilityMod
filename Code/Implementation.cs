@@ -29,6 +29,7 @@ namespace TLDAccessibility
         private const float MenuProbeWindowSeconds = 0.25f;
         private const float MenuProbeSpeakCooldownSeconds = 0.25f;
         private const float MenuProbeChangeThreshold = 0.5f;
+        private const int NguiLabelSnapshotLimit = 20;
 
         public override void OnInitializeMelon()
         {
@@ -174,6 +175,7 @@ namespace TLDAccessibility
                     speechService?.Speak(spokenText, A11ySpeechPriority.Critical, "menu_probe_ui_toolkit_snapshot", false);
                 }
                 LogMenuProbeDiagnostics();
+                LogNguiUILabelSnapshot();
                 if (snapshot.Candidates.Count == 0)
                 {
                     A11yLogger.Info("MenuProbe snapshot: no visible text candidates.");
@@ -226,30 +228,44 @@ namespace TLDAccessibility
         {
             A11yLogger.Info("Selection snapshot hotkey pressed.");
             EventSystem eventSystem = EventSystem.current;
-            if (eventSystem == null)
-            {
-                A11yLogger.Info("Selection snapshot: EventSystem is null.");
-                speechService?.Speak("EventSystem is null", A11ySpeechPriority.Critical, "ui_selection_snapshot", false);
-                return;
-            }
+            GameObject selected = eventSystem != null ? eventSystem.currentSelectedGameObject : null;
+            GameObject nguiSelected = NguiReflection.GetSelectedOrHoveredObject();
+            string nguiLabel = NguiReflection.ResolveLabelText(nguiSelected);
 
-            GameObject selected = eventSystem.currentSelectedGameObject;
-            if (selected == null)
+            string eventName = selected != null ? selected.name : "(null)";
+            string eventPath = selected != null ? MenuProbe.BuildHierarchyPath(selected.transform) : "(null)";
+            string nguiName = nguiSelected != null ? nguiSelected.name : "(null)";
+            string nguiPath = nguiSelected != null ? MenuProbe.BuildHierarchyPath(nguiSelected.transform) : "(null)";
+            string nguiLabelTrimmed = TrimSnapshotText(nguiLabel);
+
+            A11yLogger.Info($"Selection snapshot: EventSystem selected={eventName}, path={eventPath}");
+            A11yLogger.Info($"Selection snapshot: NGUI selected={nguiName}, path={nguiPath}, label=\"{nguiLabelTrimmed}\"");
+
+            if (selected == null && nguiSelected == null)
             {
                 A11yLogger.Info("Selection snapshot: No selected UI object.");
                 speechService?.Speak("No selected UI object", A11ySpeechPriority.Critical, "ui_selection_snapshot", false);
                 return;
             }
 
-            string narration = focusTracker?.BuildUiSelectionNarration(selected);
-            if (string.IsNullOrWhiteSpace(narration))
+            if (selected != null)
             {
-                narration = selected.name;
+                string narration = focusTracker?.BuildUiSelectionNarration(selected);
+                if (string.IsNullOrWhiteSpace(narration))
+                {
+                    narration = selected.name;
+                }
+
+                speechService?.Speak($"Selected: {narration}", A11ySpeechPriority.Critical, "ui_selection_snapshot", false);
+                string details = BuildSelectionSnapshotDetails(selected, narration);
+                A11yLogger.Info(details);
+                return;
             }
 
-            speechService?.Speak($"Selected: {narration}", A11ySpeechPriority.Critical, "ui_selection_snapshot", false);
-            string details = BuildSelectionSnapshotDetails(selected, narration);
-            A11yLogger.Info(details);
+            string nguiNarration = string.IsNullOrWhiteSpace(nguiLabel) ? nguiSelected.name : nguiLabel;
+            speechService?.Speak($"Selected: {nguiNarration}", A11ySpeechPriority.Critical, "ui_selection_snapshot", false);
+            string nguiDetails = BuildSelectionSnapshotDetails(nguiSelected, nguiNarration);
+            A11yLogger.Info(nguiDetails);
         }
 
         private static string BuildSelectionSnapshotDetails(GameObject selected, string narration)
@@ -317,6 +333,18 @@ namespace TLDAccessibility
             return $"{text.Substring(0, maxLength)}...";
         }
 
+        private readonly struct NguiLabelEntry
+        {
+            public NguiLabelEntry(string text, string path)
+            {
+                Text = text;
+                Path = path;
+            }
+
+            public string Text { get; }
+            public string Path { get; }
+        }
+
         private static void LogMenuProbeDiagnostics()
         {
             LogEventSystemDiagnostics();
@@ -324,6 +352,74 @@ namespace TLDAccessibility
             List<Transform> transforms = FindAllTransforms();
             LogSceneDistribution(transforms);
             LogComponentHistogramAndKeywords(transforms);
+        }
+
+        private static void LogNguiUILabelSnapshot()
+        {
+            List<Transform> transforms = FindAllTransforms();
+            if (transforms == null || transforms.Count == 0)
+            {
+                A11yLogger.Info("MenuProbe NGUI UILabel snapshot: no transforms found.");
+                return;
+            }
+
+            int totalLabels = 0;
+            List<NguiLabelEntry> visibleLabels = new List<NguiLabelEntry>();
+
+            for (int i = 0; i < transforms.Count; i++)
+            {
+                Transform transform = transforms[i];
+                if (transform == null)
+                {
+                    continue;
+                }
+
+                GameObject gameObject = transform.gameObject;
+                if (gameObject == null)
+                {
+                    continue;
+                }
+
+                Component[] components = gameObject.GetComponents<Component>();
+                if (components == null)
+                {
+                    continue;
+                }
+
+                for (int componentIndex = 0; componentIndex < components.Length; componentIndex++)
+                {
+                    Component component = components[componentIndex];
+                    if (component == null || !NguiReflection.IsLabel(component))
+                    {
+                        continue;
+                    }
+
+                    totalLabels++;
+                    if (!gameObject.activeInHierarchy)
+                    {
+                        continue;
+                    }
+
+                    string text = NguiReflection.GetLabelText(component);
+                    text = VisibilityUtil.NormalizeText(text);
+                    if (string.IsNullOrWhiteSpace(text))
+                    {
+                        continue;
+                    }
+
+                    string path = MenuProbe.BuildHierarchyPath(transform);
+                    visibleLabels.Add(new NguiLabelEntry(text, path));
+                }
+            }
+
+            int limit = Mathf.Min(visibleLabels.Count, NguiLabelSnapshotLimit);
+            A11yLogger.Info($"MenuProbe NGUI UILabel snapshot: totalUILabel={totalLabels}, visibleTextLabels={visibleLabels.Count}, showing {limit}");
+            for (int i = 0; i < limit; i++)
+            {
+                NguiLabelEntry entry = visibleLabels[i];
+                string text = TrimSnapshotText(entry.Text);
+                A11yLogger.Info($"MenuProbe NGUI UILabel[{i + 1}]: text=\"{text}\", path={entry.Path}");
+            }
         }
 
         private static void LogEventSystemDiagnostics()
