@@ -229,8 +229,8 @@ namespace TLDAccessibility
             A11yLogger.Info("Selection snapshot hotkey pressed.");
             EventSystem eventSystem = EventSystem.current;
             GameObject selected = eventSystem != null ? eventSystem.currentSelectedGameObject : null;
-            GameObject nguiSelected = NguiReflection.GetSelectedOrHoveredObject();
-            string nguiLabel = NguiReflection.ResolveLabelText(nguiSelected);
+            GameObject nguiSelected = NGUIReflection.GetSelectedOrHoveredObject();
+            string nguiLabel = NGUIReflection.ResolveLabelText(nguiSelected);
 
             string eventName = selected != null ? selected.name : "(null)";
             string eventPath = selected != null ? MenuProbe.BuildHierarchyPath(selected.transform) : "(null)";
@@ -389,7 +389,7 @@ namespace TLDAccessibility
                 for (int componentIndex = 0; componentIndex < components.Length; componentIndex++)
                 {
                     Component component = components[componentIndex];
-                    if (component == null || !NguiReflection.IsLabel(component))
+                    if (component == null || !NGUIReflection.IsLabel(component))
                     {
                         continue;
                     }
@@ -400,7 +400,7 @@ namespace TLDAccessibility
                         continue;
                     }
 
-                    string text = NguiReflection.GetLabelText(component);
+                    string text = NGUIReflection.GetLabelText(component);
                     text = VisibilityUtil.NormalizeText(text);
                     if (string.IsNullOrWhiteSpace(text))
                     {

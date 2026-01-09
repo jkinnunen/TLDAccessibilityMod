@@ -147,7 +147,7 @@ namespace TLDAccessibility.A11y.UI
 
         private void UpdateNguiSelection()
         {
-            GameObject selected = NguiReflection.GetSelectedOrHoveredObject();
+            GameObject selected = NGUIReflection.GetSelectedOrHoveredObject();
             if (selected == null)
             {
                 lastNguiSelected = null;
@@ -160,7 +160,7 @@ namespace TLDAccessibility.A11y.UI
             }
 
             lastNguiSelected = selected;
-            string label = NguiReflection.ResolveLabelText(selected);
+            string label = NGUIReflection.ResolveLabelText(selected);
             if (string.IsNullOrWhiteSpace(label))
             {
                 return;
