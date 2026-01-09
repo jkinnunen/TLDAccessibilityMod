@@ -15,8 +15,11 @@ namespace TLDAccessibility.A11y.UI
         private GameObject lastFocused;
         private GameObject lastSelected;
         private GameObject lastNguiSelected;
+        private GameObject lastNguiHovered;
         private float lastNguiSpeakTime;
         private const float NguiSpeakCooldownSeconds = 0.2f;
+        private static bool nguiHoverExceptionLogged;
+        private static bool nguiSelectExceptionLogged;
 
         public FocusTracker(A11ySpeechService speechService)
         {
@@ -147,20 +150,21 @@ namespace TLDAccessibility.A11y.UI
 
         private void UpdateNguiSelection()
         {
-            GameObject selected = NguiReflection.GetSelectedOrHoveredObject();
-            if (selected == null)
+            GameObject hovered = NguiReflection.GetHoveredObject();
+            if (hovered == null)
             {
                 lastNguiSelected = null;
+                lastNguiHovered = null;
                 return;
             }
 
-            if (selected == lastNguiSelected)
+            if (hovered == lastNguiSelected || hovered == lastNguiHovered)
             {
                 return;
             }
 
-            lastNguiSelected = selected;
-            string label = NguiReflection.ResolveLabelText(selected);
+            lastNguiHovered = hovered;
+            string label = NguiReflection.ResolveLabelText(hovered);
             if (string.IsNullOrWhiteSpace(label))
             {
                 return;
@@ -172,7 +176,40 @@ namespace TLDAccessibility.A11y.UI
                 return;
             }
 
+            lastNguiSelected = hovered;
             speechService.Speak($"Selected: {label}", A11ySpeechPriority.Normal, "ngui_focus", true);
+            lastNguiSpeakTime = now;
+        }
+
+        private void HandleNguiFocus(GameObject target, string source)
+        {
+            if (target == null)
+            {
+                return;
+            }
+
+            if (target == lastNguiSelected)
+            {
+                return;
+            }
+
+            string label = NguiReflection.ResolveLabelText(target);
+            if (string.IsNullOrWhiteSpace(label))
+            {
+                return;
+            }
+
+            float now = Time.unscaledTime;
+            if (now - lastNguiSpeakTime < NguiSpeakCooldownSeconds)
+            {
+                return;
+            }
+
+            string targetName = target.name ?? "(null)";
+            A11yLogger.Info($"NGUI focus ({source}): {targetName} -> \"{label}\"");
+            speechService.Speak($"Selected: {label}", A11ySpeechPriority.Normal, "ngui_focus", true);
+            lastNguiSelected = target;
+            lastNguiHovered = target;
             lastNguiSpeakTime = now;
         }
 
@@ -258,6 +295,8 @@ namespace TLDAccessibility.A11y.UI
 
             FocusTrackerPatches.Tracker = tracker;
             harmony.PatchAll(typeof(FocusTrackerPatches));
+            NguiFocusPatches.Tracker = tracker;
+            harmony.PatchAll(typeof(NguiFocusPatches));
         }
 
         [HarmonyPatch]
@@ -282,6 +321,89 @@ namespace TLDAccessibility.A11y.UI
                     Tracker?.HandleFocusChanged(selected);
                 }
             }
+        }
+
+        [HarmonyPatch]
+        private static class NguiFocusPatches
+        {
+            public static FocusTracker Tracker { get; set; }
+
+            [HarmonyPatch]
+            private static class UIButtonOnHoverPatch
+            {
+                private static System.Reflection.MethodBase TargetMethod()
+                {
+                    Type type = NguiReflection.GetUIButtonType();
+                    if (type == null)
+                    {
+                        return null;
+                    }
+
+                    return AccessTools.Method(type, "OnHover", new[] { typeof(bool) });
+                }
+
+                [HarmonyPostfix]
+                private static void Postfix(Component __instance, bool isOver)
+                {
+                    if (!isOver || __instance == null)
+                    {
+                        return;
+                    }
+
+                    try
+                    {
+                        Tracker?.HandleNguiFocus(__instance.gameObject, "UIButton.OnHover");
+                    }
+                    catch (Exception ex)
+                    {
+                        LogNguiPatchException(ref nguiHoverExceptionLogged, "NGUI UIButton.OnHover", ex);
+                    }
+                }
+            }
+
+            [HarmonyPatch]
+            private static class UIButtonOnSelectPatch
+            {
+                private static System.Reflection.MethodBase TargetMethod()
+                {
+                    Type type = NguiReflection.GetUIButtonType();
+                    if (type == null)
+                    {
+                        return null;
+                    }
+
+                    return AccessTools.Method(type, "OnSelect", new[] { typeof(bool) });
+                }
+
+                [HarmonyPostfix]
+                private static void Postfix(Component __instance, bool isSelected)
+                {
+                    if (!isSelected || __instance == null)
+                    {
+                        return;
+                    }
+
+                    try
+                    {
+                        Tracker?.HandleNguiFocus(__instance.gameObject, "UIButton.OnSelect");
+                    }
+                    catch (Exception ex)
+                    {
+                        LogNguiPatchException(ref nguiSelectExceptionLogged, "NGUI UIButton.OnSelect", ex);
+                    }
+                }
+            }
+        }
+
+        private static void LogNguiPatchException(ref bool guard, string label, Exception ex)
+        {
+            if (guard)
+            {
+                return;
+            }
+
+            guard = true;
+            A11yLogger.Warning($"{label} patch failed: {ex.GetType().Name}: {ex.Message}");
         }
     }
 }

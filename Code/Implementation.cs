@@ -345,10 +345,40 @@ namespace TLDAccessibility
             public string Path { get; }
         }
 
+        private readonly struct NguiLabelRawEntry
+        {
+            public NguiLabelRawEntry(
+                string path,
+                bool activeInHierarchy,
+                string enabledState,
+                int rawLength,
+                int processedLength,
+                string sample,
+                string localizeTerm)
+            {
+                Path = path;
+                ActiveInHierarchy = activeInHierarchy;
+                EnabledState = enabledState;
+                RawLength = rawLength;
+                ProcessedLength = processedLength;
+                Sample = sample;
+                LocalizeTerm = localizeTerm;
+            }
+
+            public string Path { get; }
+            public bool ActiveInHierarchy { get; }
+            public string EnabledState { get; }
+            public int RawLength { get; }
+            public int ProcessedLength { get; }
+            public string Sample { get; }
+            public string LocalizeTerm { get; }
+        }
+
         private static void LogMenuProbeDiagnostics()
         {
             LogEventSystemDiagnostics();
             LogNguiSelectionDiagnostics();
+            LogNguiUILabelRawDump();
             LogCameraCensus();
             List<Transform> transforms = FindAllTransforms();
             LogSceneDistribution(transforms);
@@ -370,6 +400,11 @@ namespace TLDAccessibility
 
             A11yLogger.Info($"MenuProbe NGUI: selectedObject={selectedName}, path={selectedPath}");
             A11yLogger.Info($"MenuProbe NGUI: hoveredObject={hoveredName}, path={hoveredPath}");
+
+            if (hoveredObject != null)
+            {
+                LogNguiLabelSubtreeDump("hoveredObject", hoveredObject, NguiLabelSnapshotLimit);
+            }
 
             GameObject resolved = selectedObject ?? hoveredObject;
             if (resolved == null)
@@ -445,6 +480,143 @@ namespace TLDAccessibility
             }
 
             return results;
+        }
+
+        private static void LogNguiLabelSubtreeDump(string label, GameObject root, int limit)
+        {
+            if (root == null)
+            {
+                return;
+            }
+
+            if (!NguiReflection.HasUILabel)
+            {
+                A11yLogger.Info($"MenuProbe NGUI {label} UILabel subtree dump: UILabel binding not available.");
+                return;
+            }
+
+            List<NguiLabelRawEntry> entries = new List<NguiLabelRawEntry>();
+            int totalLabels = 0;
+            Stack<Transform> stack = new Stack<Transform>();
+            stack.Push(root.transform);
+            while (stack.Count > 0)
+            {
+                Transform current = stack.Pop();
+                if (current == null)
+                {
+                    continue;
+                }
+
+                Component[] components = current.gameObject.GetComponents<Component>();
+                if (components != null)
+                {
+                    for (int i = 0; i < components.Length; i++)
+                    {
+                        Component component = components[i];
+                        if (component == null || !NguiReflection.IsLabel(component))
+                        {
+                            continue;
+                        }
+
+                        totalLabels++;
+                        if (entries.Count < limit)
+                        {
+                            entries.Add(BuildNguiLabelRawEntry(component, current));
+                        }
+                    }
+                }
+
+                int childCount = current.childCount;
+                for (int childIndex = 0; childIndex < childCount; childIndex++)
+                {
+                    stack.Push(current.GetChild(childIndex));
+                }
+            }
+
+            A11yLogger.Info($"MenuProbe NGUI {label} UILabel subtree dump: totalUILabel={totalLabels}, showing {entries.Count}");
+            for (int i = 0; i < entries.Count; i++)
+            {
+                LogNguiLabelRawEntry($"MenuProbe NGUI {label} UILabel[{i + 1}]", entries[i]);
+            }
+        }
+
+        private static void LogNguiUILabelRawDump()
+        {
+            if (!NguiReflection.HasUILabel)
+            {
+                A11yLogger.Info("MenuProbe NGUI RAW UILabel dump: UILabel binding not available.");
+                return;
+            }
+
+            List<Transform> transforms = FindAllTransforms();
+            if (transforms == null || transforms.Count == 0)
+            {
+                A11yLogger.Info("MenuProbe NGUI RAW UILabel dump: no transforms found.");
+                return;
+            }
+
+            int totalLabels = 0;
+            List<NguiLabelRawEntry> entries = new List<NguiLabelRawEntry>();
+
+            for (int i = 0; i < transforms.Count; i++)
+            {
+                Transform transform = transforms[i];
+                if (transform == null)
+                {
+                    continue;
+                }
+
+                Component[] components = transform.gameObject.GetComponents<Component>();
+                if (components == null)
+                {
+                    continue;
+                }
+
+                for (int componentIndex = 0; componentIndex < components.Length; componentIndex++)
+                {
+                    Component component = components[componentIndex];
+                    if (component == null || !NguiReflection.IsLabel(component))
+                    {
+                        continue;
+                    }
+
+                    totalLabels++;
+                    if (entries.Count < NguiLabelSnapshotLimit)
+                    {
+                        entries.Add(BuildNguiLabelRawEntry(component, transform));
+                    }
+                }
+            }
+
+            A11yLogger.Info($"MenuProbe NGUI RAW UILabel dump: totalUILabel={totalLabels}, showing {entries.Count}");
+            for (int i = 0; i < entries.Count; i++)
+            {
+                LogNguiLabelRawEntry($"MenuProbe NGUI RAW UILabel[{i + 1}]", entries[i]);
+            }
+        }
+
+        private static NguiLabelRawEntry BuildNguiLabelRawEntry(Component component, Transform transform)
+        {
+            NguiReflection.TryGetUILabelTextDetails(component, out string rawText, out string processedText, out string localizeTerm);
+            int rawLength = rawText?.Length ?? 0;
+            int processedLength = processedText?.Length ?? 0;
+            string sampleSource = !string.IsNullOrWhiteSpace(processedText) ? processedText : rawText;
+            string sample = string.IsNullOrWhiteSpace(sampleSource) ? string.Empty : TrimSnapshotText(VisibilityUtil.NormalizeText(sampleSource) ?? sampleSource);
+            bool activeInHierarchy = transform.gameObject.activeInHierarchy;
+            bool? enabled = NguiReflection.GetUILabelEnabled(component);
+            string enabledState = enabled.HasValue ? (enabled.Value ? "true" : "false") : "unknown";
+            string path = MenuProbe.BuildHierarchyPath(transform);
+
+            return new NguiLabelRawEntry(path, activeInHierarchy, enabledState, rawLength, processedLength, sample, localizeTerm);
+        }
+
+        private static void LogNguiLabelRawEntry(string prefix, NguiLabelRawEntry entry)
+        {
+            string localizeInfo = string.IsNullOrWhiteSpace(entry.LocalizeTerm)
+                ? string.Empty
+                : $", localize=\"{TrimSnapshotText(entry.LocalizeTerm)}\"";
+            A11yLogger.Info(
+                $"{prefix}: path={entry.Path}, activeInHierarchy={entry.ActiveInHierarchy}, enabled={entry.EnabledState}, rawLength={entry.RawLength}, processedLength={entry.ProcessedLength}, sample=\"{entry.Sample}\"{localizeInfo}");
         }
 
         private static void LogNguiUILabelSnapshot()
