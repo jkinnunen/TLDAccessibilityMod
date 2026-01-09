@@ -4,6 +4,7 @@ using System.Linq;
 using System.Reflection;
 using TLDAccessibility.A11y.Logging;
 using UnityEngine;
+using UnityEngine.EventSystems;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 using UnityEngine.UIElements;
@@ -424,7 +425,9 @@ namespace TLDAccessibility.A11y.UI
                 }
             }
 
-            return CaptureUiToolkitSnapshot(sceneScan?.UiDocuments);
+            UiToolkitSnapshot uiToolkitSnapshot = CaptureUiToolkitSnapshot(sceneScan?.UiDocuments);
+            LogDeepCensus();
+            return uiToolkitSnapshot;
         }
 
         private static UiToolkitSnapshot CaptureUiToolkitSnapshot(List<UIDocument> documents = null)
@@ -560,6 +563,268 @@ namespace TLDAccessibility.A11y.UI
             }
 
             return null;
+        }
+
+        private static void LogDeepCensus()
+        {
+            LogEventSystemCensus();
+            LogComponentHistogramAndSuspiciousComponents();
+        }
+
+        private static void LogEventSystemCensus()
+        {
+            List<EventSystem> eventSystems = FindObjectsOfTypeAllIl2CppByIl2CppType<EventSystem>();
+            int count = eventSystems.Count;
+            A11yLogger.Info($"MenuProbe EventSystem: total={count}");
+            if (count == 0)
+            {
+                return;
+            }
+
+            int index = 0;
+            foreach (EventSystem eventSystem in eventSystems)
+            {
+                if (eventSystem == null)
+                {
+                    continue;
+                }
+
+                string eventSystemName = eventSystem.gameObject != null ? eventSystem.gameObject.name : "(null)";
+                GameObject selected = eventSystem.currentSelectedGameObject;
+                string selectedName = selected != null ? selected.name : "(null)";
+                string selectedPath = selected != null ? BuildHierarchyPath(selected.transform) : "(null)";
+                index++;
+                A11yLogger.Info($"MenuProbe EventSystem[{index}]: name={eventSystemName}, currentSelected={selectedName}, path={selectedPath}");
+            }
+        }
+
+        private static void LogComponentHistogramAndSuspiciousComponents()
+        {
+            Dictionary<string, int> histogram = new Dictionary<string, int>(StringComparer.Ordinal);
+            List<SuspiciousComponentMatch> suspicious = new List<SuspiciousComponentMatch>(30);
+            int totalGameObjects = 0;
+            int totalComponents = 0;
+            int sceneCount = SceneManager.sceneCount;
+
+            for (int i = 0; i < sceneCount; i++)
+            {
+                Scene scene = SceneManager.GetSceneAt(i);
+                if (!scene.IsValid() || !scene.isLoaded)
+                {
+                    continue;
+                }
+
+                GameObject[] roots = scene.GetRootGameObjects();
+                if (roots == null || roots.Length == 0)
+                {
+                    continue;
+                }
+
+                foreach (GameObject root in roots)
+                {
+                    if (root == null)
+                    {
+                        continue;
+                    }
+
+                    Stack<Transform> stack = new Stack<Transform>();
+                    stack.Push(root.transform);
+
+                    while (stack.Count > 0)
+                    {
+                        Transform current = stack.Pop();
+                        if (current == null)
+                        {
+                            continue;
+                        }
+
+                        totalGameObjects++;
+                        GameObject gameObject = current.gameObject;
+                        Component[] components = gameObject.GetComponents<Component>();
+                        if (components != null)
+                        {
+                            foreach (Component component in components)
+                            {
+                                if (component == null)
+                                {
+                                    continue;
+                                }
+
+                                totalComponents++;
+                                string typeName = GetComponentTypeFullName(component);
+                                if (histogram.TryGetValue(typeName, out int currentCount))
+                                {
+                                    histogram[typeName] = currentCount + 1;
+                                }
+                                else
+                                {
+                                    histogram[typeName] = 1;
+                                }
+
+                                if (suspicious.Count < 30 && IsSuspiciousType(typeName))
+                                {
+                                    suspicious.Add(BuildSuspiciousMatch(component, typeName));
+                                }
+                            }
+                        }
+
+                        for (int childIndex = 0; childIndex < current.childCount; childIndex++)
+                        {
+                            stack.Push(current.GetChild(childIndex));
+                        }
+                    }
+                }
+            }
+
+            A11yLogger.Info($"MenuProbe deep census: total GameObjects={totalGameObjects}, total Components={totalComponents}, unique component types={histogram.Count}");
+
+            if (histogram.Count > 0)
+            {
+                var topEntries = histogram
+                    .OrderByDescending(pair => pair.Value)
+                    .ThenBy(pair => pair.Key, StringComparer.Ordinal)
+                    .Take(50)
+                    .ToList();
+
+                for (int i = 0; i < topEntries.Count; i++)
+                {
+                    KeyValuePair<string, int> entry = topEntries[i];
+                    A11yLogger.Info($"MenuProbe deep census top[{i + 1}]: {entry.Key}={entry.Value}");
+                }
+
+                if (histogram.Count > topEntries.Count)
+                {
+                    A11yLogger.Info("MenuProbe deep census: (others omitted)");
+                }
+            }
+
+            if (suspicious.Count == 0)
+            {
+                A11yLogger.Info("MenuProbe deep census: suspicious components: none");
+                return;
+            }
+
+            A11yLogger.Info($"MenuProbe deep census: suspicious components (showing {suspicious.Count})");
+            for (int i = 0; i < suspicious.Count; i++)
+            {
+                SuspiciousComponentMatch match = suspicious[i];
+                if (string.IsNullOrWhiteSpace(match.Label))
+                {
+                    A11yLogger.Info($"MenuProbe deep census suspicious[{i + 1}]: type={match.TypeName}, gameObject={match.GameObjectName}, path={match.HierarchyPath}");
+                }
+                else
+                {
+                    A11yLogger.Info($"MenuProbe deep census suspicious[{i + 1}]: type={match.TypeName}, gameObject={match.GameObjectName}, path={match.HierarchyPath}, label=\"{match.Label}\"");
+                }
+            }
+        }
+
+        private static string GetComponentTypeFullName(Component component)
+        {
+            if (component == null)
+            {
+                return "(null)";
+            }
+
+            Il2CppSystem.Type il2CppType = component.GetIl2CppType();
+            if (il2CppType != null && !string.IsNullOrWhiteSpace(il2CppType.FullName))
+            {
+                return il2CppType.FullName;
+            }
+
+            Type managedType = component.GetType();
+            return string.IsNullOrWhiteSpace(managedType.FullName) ? managedType.Name : managedType.FullName;
+        }
+
+        private static bool IsSuspiciousType(string typeName)
+        {
+            if (string.IsNullOrWhiteSpace(typeName))
+            {
+                return false;
+            }
+
+            string lower = typeName.ToLowerInvariant();
+            return lower.Contains("menu")
+                || lower.Contains("mainmenu")
+                || lower.Contains("panel")
+                || lower.Contains("option")
+                || lower.Contains("button")
+                || lower.Contains("select")
+                || lower.Contains("focus")
+                || lower.Contains("nav")
+                || lower.Contains("highlight")
+                || lower.Contains("ui")
+                || lower.Contains("label")
+                || lower.Contains("text")
+                || lower.Contains("localiz");
+        }
+
+        private static SuspiciousComponentMatch BuildSuspiciousMatch(Component component, string typeName)
+        {
+            string gameObjectName = component?.gameObject != null ? component.gameObject.name : "(null)";
+            string hierarchyPath = component != null ? BuildHierarchyPath(component.transform) : "(null)";
+            string label = TryExtractLabel(component);
+            return new SuspiciousComponentMatch(typeName, gameObjectName, hierarchyPath, label);
+        }
+
+        private static string TryExtractLabel(Component component)
+        {
+            if (component == null)
+            {
+                return null;
+            }
+
+            string[] candidates =
+            {
+                "text",
+                "label",
+                "m_Text",
+                "mText",
+                "title",
+                "name",
+                "locKey",
+                "localizationKey"
+            };
+
+            Type type = component.GetType();
+            foreach (string candidate in candidates)
+            {
+                PropertyInfo property = type.GetProperty(candidate, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.IgnoreCase);
+                if (property != null && property.PropertyType == typeof(string))
+                {
+                    if (property.GetValue(component) is string propertyValue && !string.IsNullOrWhiteSpace(propertyValue))
+                    {
+                        return TrimText(VisibilityUtil.NormalizeText(propertyValue), 120);
+                    }
+                }
+
+                FieldInfo field = type.GetField(candidate, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.IgnoreCase);
+                if (field != null && field.FieldType == typeof(string))
+                {
+                    if (field.GetValue(component) is string fieldValue && !string.IsNullOrWhiteSpace(fieldValue))
+                    {
+                        return TrimText(VisibilityUtil.NormalizeText(fieldValue), 120);
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        private sealed class SuspiciousComponentMatch
+        {
+            public SuspiciousComponentMatch(string typeName, string gameObjectName, string hierarchyPath, string label)
+            {
+                TypeName = typeName;
+                GameObjectName = gameObjectName;
+                HierarchyPath = hierarchyPath;
+                Label = label;
+            }
+
+            public string TypeName { get; }
+            public string GameObjectName { get; }
+            public string HierarchyPath { get; }
+            public string Label { get; }
         }
 
         private static void AccumulateCounters(Component component, Func<Component, string> textResolver, FilterCounters counters)
@@ -743,6 +1008,22 @@ namespace TLDAccessibility.A11y.UI
             }
 
             Il2CppSystem.Type il2cppType = Il2CppInterop.Runtime.Il2CppType.From(type);
+            UnityEngine.Object[] found = UnityEngine.Resources.FindObjectsOfTypeAll(il2cppType);
+            List<T> results = new List<T>(found.Length);
+            foreach (UnityEngine.Object obj in found)
+            {
+                if (obj is T casted)
+                {
+                    results.Add(casted);
+                }
+            }
+
+            return results;
+        }
+
+        private static List<T> FindObjectsOfTypeAllIl2CppByIl2CppType<T>() where T : UnityEngine.Object
+        {
+            Il2CppSystem.Type il2cppType = Il2CppInterop.Runtime.Il2CppType.Of<T>();
             UnityEngine.Object[] found = UnityEngine.Resources.FindObjectsOfTypeAll(il2cppType);
             List<T> results = new List<T>(found.Length);
             foreach (UnityEngine.Object obj in found)
