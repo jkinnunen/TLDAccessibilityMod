@@ -14,6 +14,9 @@ namespace TLDAccessibility.A11y.UI
         private readonly A11ySpeechService speechService;
         private GameObject lastFocused;
         private GameObject lastSelected;
+        private GameObject lastNguiSelected;
+        private float lastNguiSpeakTime;
+        private const float NguiSpeakCooldownSeconds = 0.2f;
 
         public FocusTracker(A11ySpeechService speechService)
         {
@@ -22,23 +25,8 @@ namespace TLDAccessibility.A11y.UI
 
         public void Update()
         {
-            EventSystem eventSystem = EventSystem.current;
-            if (eventSystem == null)
-            {
-                return;
-            }
-
-            GameObject current = eventSystem.currentSelectedGameObject;
-            if (current == null)
-            {
-                lastSelected = null;
-                return;
-            }
-
-            if (current != lastSelected)
-            {
-                HandleUiSelectionChanged(lastSelected, current);
-            }
+            UpdateUnitySelection();
+            UpdateNguiSelection();
         }
 
         public void HandleFocusChanged(GameObject current)
@@ -133,6 +121,59 @@ namespace TLDAccessibility.A11y.UI
 
             string narration = string.IsNullOrWhiteSpace(spokenText) ? currentName : spokenText;
             speechService.Speak($"Selected: {narration}", A11ySpeechPriority.Normal, "ui_selected", true);
+        }
+
+        private void UpdateUnitySelection()
+        {
+            EventSystem eventSystem = EventSystem.current;
+            if (eventSystem == null)
+            {
+                lastSelected = null;
+                return;
+            }
+
+            GameObject current = eventSystem.currentSelectedGameObject;
+            if (current == null)
+            {
+                lastSelected = null;
+                return;
+            }
+
+            if (current != lastSelected)
+            {
+                HandleUiSelectionChanged(lastSelected, current);
+            }
+        }
+
+        private void UpdateNguiSelection()
+        {
+            GameObject selected = NguiReflection.GetSelectedOrHoveredObject();
+            if (selected == null)
+            {
+                lastNguiSelected = null;
+                return;
+            }
+
+            if (selected == lastNguiSelected)
+            {
+                return;
+            }
+
+            lastNguiSelected = selected;
+            string label = NguiReflection.ResolveLabelText(selected);
+            if (string.IsNullOrWhiteSpace(label))
+            {
+                return;
+            }
+
+            float now = Time.unscaledTime;
+            if (now - lastNguiSpeakTime < NguiSpeakCooldownSeconds)
+            {
+                return;
+            }
+
+            speechService.Speak($"Selected: {label}", A11ySpeechPriority.Normal, "ngui_focus", true);
+            lastNguiSpeakTime = now;
         }
 
         private static string ResolveSelectionText(GameObject target)
