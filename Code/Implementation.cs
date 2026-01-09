@@ -55,6 +55,7 @@ namespace TLDAccessibility
             speechService?.Update();
             focusTracker?.Update();
             TmpTextPolling.Update();
+            menuSelectionTracker?.Update();
 
             HandleDebugHotkey();
             HandleHotkeys();
@@ -308,15 +309,39 @@ namespace TLDAccessibility
             public string LocalizeTerm { get; }
         }
 
-        private static void LogMenuProbeDiagnostics()
+        private void LogMenuProbeDiagnostics()
         {
             LogEventSystemDiagnostics();
             LogNguiSelectionDiagnostics();
+            LogMenuSelectionTrackerDiagnostics();
             LogNguiUILabelRawDump();
             LogCameraCensus();
             List<Transform> transforms = FindAllTransforms();
             LogSceneDistribution(transforms);
             LogComponentHistogramAndKeywords(transforms);
+        }
+
+        private void LogMenuSelectionTrackerDiagnostics()
+        {
+            if (menuSelectionTracker == null)
+            {
+                A11yLogger.Info("MenuProbe menu selection: tracker unavailable.");
+                return;
+            }
+
+            MenuSelectionTracker.MenuSelectionProbeSnapshot snapshot = menuSelectionTracker.CaptureProbeSnapshot();
+            string menuPath = string.IsNullOrWhiteSpace(snapshot.MenuPath) ? "(none)" : snapshot.MenuPath;
+            string selectedPath = string.IsNullOrWhiteSpace(snapshot.SelectedPath) ? "(null)" : snapshot.SelectedPath;
+            string labelText = string.IsNullOrWhiteSpace(snapshot.LabelText) ? "(none)" : snapshot.LabelText;
+            A11yLogger.Info($"MenuProbe menu selection: activeMenuPath={menuPath}");
+            A11yLogger.Info($"MenuProbe menu selection: selectedItemPath={selectedPath}");
+            A11yLogger.Info($"MenuProbe menu selection: label=\"{labelText}\"");
+
+            if (selectedPath == "(null)")
+            {
+                string reason = string.IsNullOrWhiteSpace(snapshot.FailureReason) ? "(unknown)" : snapshot.FailureReason;
+                A11yLogger.Info($"MenuProbe menu selection: unresolvedReason={reason}");
+            }
         }
 
         private static void LogNguiSelectionDiagnostics()
