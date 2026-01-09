@@ -346,13 +346,13 @@ namespace TLDAccessibility.A11y.UI
                 return null;
             }
 
-            Type type = GetUILocalizeType();
+            System.Type type = GetUILocalizeType();
             if (type == null)
             {
                 return null;
             }
 
-            Component component = target.GetComponent(type);
+            Component component = target.GetComponent(Il2CppInterop.Runtime.Il2CppType.From(type));
             if (component == null)
             {
                 return null;
