@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Reflection;
 using HarmonyLib;
+using TLDAccessibility.A11y.Logging;
 using UnityEngine;
 
 namespace TLDAccessibility.A11y.UI
@@ -27,21 +28,56 @@ namespace TLDAccessibility.A11y.UI
         private static FieldInfo uiLabelWorldCornersField;
         private static bool uiCameraInitialized;
         private static Type uiCameraType;
-        private static PropertyInfo selectedProperty;
-        private static FieldInfo selectedField;
-        private static PropertyInfo hoveredProperty;
-        private static FieldInfo hoveredField;
+        private static MethodInfo selectedGetter;
+        private static MethodInfo hoveredGetter;
+        private static bool uiCameraTypeMissingLogged;
+        private static bool selectedGetterMissingLogged;
+        private static bool hoveredGetterMissingLogged;
+        private static bool selectedGetterExceptionLogged;
+        private static bool hoveredGetterExceptionLogged;
+
+        internal readonly struct UiCameraStatus
+        {
+            public UiCameraStatus(bool typeExists, bool selectedReadable, bool hoveredReadable)
+            {
+                TypeExists = typeExists;
+                SelectedReadable = selectedReadable;
+                HoveredReadable = hoveredReadable;
+            }
+
+            public bool TypeExists { get; }
+            public bool SelectedReadable { get; }
+            public bool HoveredReadable { get; }
+        }
 
         public static GameObject GetSelectedOrHoveredObject()
         {
             EnsureUiCameraReflection();
-            GameObject selected = ReadGameObject(selectedProperty, selectedField);
+            GameObject selected = ReadGameObject(selectedGetter, "selectedObject", ref selectedGetterMissingLogged, ref selectedGetterExceptionLogged);
             if (selected != null)
             {
                 return selected;
             }
 
-            return ReadGameObject(hoveredProperty, hoveredField);
+            return ReadGameObject(hoveredGetter, "hoveredObject", ref hoveredGetterMissingLogged, ref hoveredGetterExceptionLogged);
+        }
+
+        public static GameObject GetSelectedObject()
+        {
+            EnsureUiCameraReflection();
+            return ReadGameObject(selectedGetter, "selectedObject", ref selectedGetterMissingLogged, ref selectedGetterExceptionLogged);
+        }
+
+        public static GameObject GetHoveredObject()
+        {
+            EnsureUiCameraReflection();
+            return ReadGameObject(hoveredGetter, "hoveredObject", ref hoveredGetterMissingLogged, ref hoveredGetterExceptionLogged);
+        }
+
+        public static UiCameraStatus GetUiCameraStatus()
+        {
+            EnsureUiCameraReflection();
+            return new UiCameraStatus(uiCameraType != null, selectedGetter != null, hoveredGetter != null);
         }
 
         public static string ResolveLabelText(GameObject target)
@@ -89,7 +125,7 @@ namespace TLDAccessibility.A11y.UI
                 return uiLabelType;
             }
 
-            uiLabelType = AccessTools.TypeByName(UILabelTypeName);
+            uiLabelType = FindTypeByName($"Il2Cpp.{UILabelTypeName}") ?? FindTypeByName(UILabelTypeName);
             uiLabelTypeChecked = true;
             return uiLabelType;
         }
@@ -228,27 +264,44 @@ namespace TLDAccessibility.A11y.UI
                 return;
             }
 
-            uiCameraType = AccessTools.TypeByName("UICamera");
+            uiCameraType = FindTypeByName("Il2Cpp.UICamera") ?? FindTypeByName("UICamera");
             if (uiCameraType != null)
             {
-                selectedProperty = AccessTools.Property(uiCameraType, "selectedObject");
-                selectedField = AccessTools.Field(uiCameraType, "selectedObject");
-                hoveredProperty = AccessTools.Property(uiCameraType, "hoveredObject");
-                hoveredField = AccessTools.Field(uiCameraType, "hoveredObject");
+                selectedGetter = AccessTools.PropertyGetter(uiCameraType, "selectedObject")
+                    ?? AccessTools.Method(uiCameraType, "get_selectedObject");
+                hoveredGetter = AccessTools.PropertyGetter(uiCameraType, "hoveredObject")
+                    ?? AccessTools.Method(uiCameraType, "get_hoveredObject");
+            }
+            else
+            {
+                LogOnce(ref uiCameraTypeMissingLogged, "NGUI: UICamera type not found; selected/hovered lookup disabled.");
             }
 
             uiCameraInitialized = true;
         }
 
-        private static GameObject ReadGameObject(PropertyInfo property, FieldInfo field)
+        private static GameObject ReadGameObject(
+            MethodInfo getter,
+            string label,
+            ref bool missingLogged,
+            ref bool exceptionLogged)
         {
-            object value = property?.GetValue(null);
-            if (value == null)
+            if (getter == null)
             {
-                value = field?.GetValue(null);
+                LogOnce(ref missingLogged, $"NGUI: UICamera {label} getter not available.");
+                return null;
             }
 
-            return CoerceGameObject(value);
+            try
+            {
+                object value = getter.Invoke(null, null);
+                return CoerceGameObject(value);
+            }
+            catch (Exception ex)
+            {
+                LogOnce(ref exceptionLogged, $"NGUI: UICamera {label} getter failed: {ex.GetType().Name}: {ex.Message}");
+                return null;
+            }
         }
 
         private static GameObject CoerceGameObject(object value)
@@ -469,6 +522,41 @@ namespace TLDAccessibility.A11y.UI
 
             public Transform Transform { get; }
             public int Depth { get; }
+        }
+
+        private static void LogOnce(ref bool guard, string message)
+        {
+            if (guard)
+            {
+                return;
+            }
+
+            guard = true;
+            A11yLogger.Info(message);
+        }
+
+        private static Type FindTypeByName(string typeName)
+        {
+            if (string.IsNullOrWhiteSpace(typeName))
+            {
+                return null;
+            }
+
+            foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                if (assembly == null)
+                {
+                    continue;
+                }
+
+                Type type = assembly.GetType(typeName, false);
+                if (type != null)
+                {
+                    return type;
+                }
+            }
+
+            return null;
         }
     }
 }
