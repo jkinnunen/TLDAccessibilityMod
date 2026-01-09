@@ -173,6 +173,7 @@ namespace TLDAccessibility
                         : $"MenuProbe: UI Toolkit found {uiToolkitSnapshot.TextCount} text nodes. First: {firstText}";
                     speechService?.Speak(spokenText, A11ySpeechPriority.Critical, "menu_probe_ui_toolkit_snapshot", false);
                 }
+                LogMenuProbeDiagnostics();
                 if (snapshot.Candidates.Count == 0)
                 {
                     A11yLogger.Info("MenuProbe snapshot: no visible text candidates.");
@@ -314,6 +315,238 @@ namespace TLDAccessibility
             }
 
             return $"{text.Substring(0, maxLength)}...";
+        }
+
+        private static void LogMenuProbeDiagnostics()
+        {
+            LogEventSystemDiagnostics();
+            List<Transform> transforms = FindAllTransforms();
+            LogSceneDistribution(transforms);
+            LogComponentHistogramAndKeywords(transforms);
+        }
+
+        private static void LogEventSystemDiagnostics()
+        {
+            Il2CppSystem.Type eventSystemType = Il2CppInterop.Runtime.Il2CppType.Of<EventSystem>();
+            UnityEngine.Object[] found = Resources.FindObjectsOfTypeAll(eventSystemType);
+            EventSystem eventSystem = null;
+            if (found != null)
+            {
+                for (int i = 0; i < found.Length; i++)
+                {
+                    if (found[i] is EventSystem candidate)
+                    {
+                        eventSystem = candidate;
+                        break;
+                    }
+                }
+            }
+
+            GameObject selected = eventSystem != null ? eventSystem.currentSelectedGameObject : null;
+            string selectedName = selected != null ? selected.name : "(null)";
+            A11yLogger.Info($"MenuProbe diagnostics: EventSystem exists={eventSystem != null}, currentSelected={selectedName}");
+        }
+
+        private static List<Transform> FindAllTransforms()
+        {
+            Il2CppSystem.Type transformType = Il2CppInterop.Runtime.Il2CppType.Of<Transform>();
+            UnityEngine.Object[] found = Resources.FindObjectsOfTypeAll(transformType);
+            if (found == null)
+            {
+                return new List<Transform>();
+            }
+
+            List<Transform> results = new List<Transform>(found.Length);
+            for (int i = 0; i < found.Length; i++)
+            {
+                if (found[i] is Transform transform)
+                {
+                    results.Add(transform);
+                }
+            }
+
+            return results;
+        }
+
+        private static void LogSceneDistribution(List<Transform> transforms)
+        {
+            Dictionary<string, int> sceneCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+            if (transforms == null)
+            {
+                A11yLogger.Info("MenuProbe diagnostics: scene distribution unavailable (no transforms).");
+                return;
+            }
+
+            for (int i = 0; i < transforms.Count; i++)
+            {
+                Transform transform = transforms[i];
+                if (transform == null || transform.gameObject == null)
+                {
+                    continue;
+                }
+
+                Scene scene = transform.gameObject.scene;
+                string sceneName = scene.IsValid() ? scene.name : "(invalid)";
+                if (string.IsNullOrWhiteSpace(sceneName))
+                {
+                    sceneName = "(unnamed)";
+                }
+
+                if (sceneCounts.TryGetValue(sceneName, out int current))
+                {
+                    sceneCounts[sceneName] = current + 1;
+                }
+                else
+                {
+                    sceneCounts[sceneName] = 1;
+                }
+            }
+
+            List<KeyValuePair<string, int>> entries = new List<KeyValuePair<string, int>>(sceneCounts);
+            entries.Sort((left, right) =>
+            {
+                int compare = right.Value.CompareTo(left.Value);
+                if (compare != 0)
+                {
+                    return compare;
+                }
+
+                return string.Compare(left.Key, right.Key, StringComparison.Ordinal);
+            });
+
+            int limit = Mathf.Min(entries.Count, 10);
+            A11yLogger.Info($"MenuProbe diagnostics: scene distribution entries={entries.Count}, showing top {limit}");
+            for (int i = 0; i < limit; i++)
+            {
+                KeyValuePair<string, int> entry = entries[i];
+                A11yLogger.Info($"MenuProbe diagnostics scene[{i + 1}]: {entry.Key}={entry.Value}");
+            }
+        }
+
+        private static void LogComponentHistogramAndKeywords(List<Transform> transforms)
+        {
+            if (transforms == null)
+            {
+                A11yLogger.Info("MenuProbe diagnostics: component histogram unavailable (no transforms).");
+                return;
+            }
+
+            Dictionary<string, int> histogram = new Dictionary<string, int>(StringComparer.Ordinal);
+            HashSet<string> keywordMatches = new HashSet<string>(StringComparer.Ordinal);
+            string[] keywords =
+            {
+                "label",
+                "button",
+                "menu",
+                "ui",
+                "text",
+                "localiz",
+                "ngui",
+                "panel",
+                "widget",
+                "sprite",
+                "select"
+            };
+
+            int totalComponents = 0;
+            for (int i = 0; i < transforms.Count; i++)
+            {
+                Transform transform = transforms[i];
+                if (transform == null)
+                {
+                    continue;
+                }
+
+                Component[] components = transform.gameObject.GetComponents<Component>();
+                if (components == null)
+                {
+                    continue;
+                }
+
+                for (int componentIndex = 0; componentIndex < components.Length; componentIndex++)
+                {
+                    Component component = components[componentIndex];
+                    if (component == null)
+                    {
+                        continue;
+                    }
+
+                    totalComponents++;
+                    string typeName = GetIl2CppTypeName(component);
+                    if (histogram.TryGetValue(typeName, out int current))
+                    {
+                        histogram[typeName] = current + 1;
+                    }
+                    else
+                    {
+                        histogram[typeName] = 1;
+                    }
+
+                    string lower = typeName.ToLowerInvariant();
+                    for (int keywordIndex = 0; keywordIndex < keywords.Length; keywordIndex++)
+                    {
+                        if (lower.Contains(keywords[keywordIndex]))
+                        {
+                            keywordMatches.Add(typeName);
+                            break;
+                        }
+                    }
+                }
+            }
+
+            List<KeyValuePair<string, int>> entries = new List<KeyValuePair<string, int>>(histogram);
+            entries.Sort((left, right) =>
+            {
+                int compare = right.Value.CompareTo(left.Value);
+                if (compare != 0)
+                {
+                    return compare;
+                }
+
+                return string.Compare(left.Key, right.Key, StringComparison.Ordinal);
+            });
+
+            int limit = Mathf.Min(entries.Count, 40);
+            A11yLogger.Info($"MenuProbe diagnostics: component histogram totalComponents={totalComponents}, uniqueTypes={histogram.Count}, showing top {limit}");
+            for (int i = 0; i < limit; i++)
+            {
+                KeyValuePair<string, int> entry = entries[i];
+                A11yLogger.Info($"MenuProbe diagnostics component[{i + 1}]: {entry.Key}={entry.Value}");
+            }
+
+            if (entries.Count > limit)
+            {
+                A11yLogger.Info("MenuProbe diagnostics: (other component types omitted)");
+            }
+
+            List<string> keywordList = new List<string>(keywordMatches);
+            keywordList.Sort(StringComparer.OrdinalIgnoreCase);
+            string keywordSummary = keywordList.Count > 0 ? string.Join(", ", keywordList) : "(none)";
+            A11yLogger.Info($"MenuProbe diagnostics: keyword component types ({keywordList.Count})=[{keywordSummary}]");
+        }
+
+        private static string GetIl2CppTypeName(Component component)
+        {
+            if (component == null)
+            {
+                return "(null)";
+            }
+
+            Il2CppSystem.Type il2CppType = component.GetIl2CppType();
+            if (il2CppType != null)
+            {
+                if (!string.IsNullOrWhiteSpace(il2CppType.FullName))
+                {
+                    return il2CppType.FullName;
+                }
+
+                if (!string.IsNullOrWhiteSpace(il2CppType.Name))
+                {
+                    return il2CppType.Name;
+                }
+            }
+
+            return "(unknown)";
         }
 
         private void HandleHotkeys()
