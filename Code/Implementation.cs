@@ -23,12 +23,7 @@ namespace TLDAccessibility
         private bool loggedSettingsUnavailable;
         private Settings settings;
         private MenuProbe menuProbe;
-        private Dictionary<int, MenuProbe.CandidateSnapshot> lastMenuSnapshot;
-        private float menuNavigationWindowEnd;
-        private float lastMenuHighlightSpeakTime;
-        private const float MenuProbeWindowSeconds = 0.25f;
-        private const float MenuProbeSpeakCooldownSeconds = 0.25f;
-        private const float MenuProbeChangeThreshold = 0.5f;
+        private MenuSelectionTracker menuSelectionTracker;
         private const int NguiLabelSnapshotLimit = 20;
         private static bool nguiLabelEntryExceptionLogged;
 
@@ -43,10 +38,12 @@ namespace TLDAccessibility
             screenReview = new ScreenReviewController(speechService);
             TextChangeHandler.SpeechService = speechService;
             menuProbe = new MenuProbe();
+            menuSelectionTracker = new MenuSelectionTracker(speechService);
 
             harmony = new HarmonyLib.Harmony("TLDAccessibility.A11y");
             FocusTracker.ApplyHarmonyPatches(harmony, focusTracker);
             TextChangePatches.Apply(harmony);
+            MenuSelectionTracker.ApplyHarmonyPatches(harmony, menuSelectionTracker);
 
             A11yLogger.Info("Accessibility layer initialized.");
             A11yLogger.Info("Startup speech test: requesting output.");
@@ -59,7 +56,6 @@ namespace TLDAccessibility
             focusTracker?.Update();
             TmpTextPolling.Update();
 
-            HandleMenuProbeNavigation();
             HandleDebugHotkey();
             HandleHotkeys();
         }
@@ -88,70 +84,6 @@ namespace TLDAccessibility
             }
         }
 
-        private void HandleMenuProbeNavigation()
-        {
-            if (menuProbe == null)
-            {
-                return;
-            }
-
-            float now = Time.unscaledTime;
-            bool navigationPressed = Input.GetKeyDown(KeyCode.UpArrow)
-                || Input.GetKeyDown(KeyCode.DownArrow)
-                || Input.GetKeyDown(KeyCode.LeftArrow)
-                || Input.GetKeyDown(KeyCode.RightArrow);
-
-            if (navigationPressed)
-            {
-                menuNavigationWindowEnd = now + MenuProbeWindowSeconds;
-                if (lastMenuSnapshot == null)
-                {
-                    lastMenuSnapshot = menuProbe.Capture().ById;
-                    return;
-                }
-            }
-
-            if (menuNavigationWindowEnd <= 0f || now > menuNavigationWindowEnd)
-            {
-                lastMenuSnapshot = null;
-                menuNavigationWindowEnd = 0f;
-                return;
-            }
-
-            MenuProbe.SnapshotResult currentSnapshot = menuProbe.Capture();
-            if (lastMenuSnapshot != null)
-            {
-                MenuProbe.CandidateSnapshot bestCandidate = null;
-                float bestScore = 0f;
-
-                foreach (MenuProbe.CandidateSnapshot candidate in currentSnapshot.Candidates)
-                {
-                    if (!lastMenuSnapshot.TryGetValue(candidate.InstanceId, out MenuProbe.CandidateSnapshot previous))
-                    {
-                        continue;
-                    }
-
-                    float score = MenuProbe.CalculateChangeScore(previous, candidate);
-                    if (score > bestScore)
-                    {
-                        bestScore = score;
-                        bestCandidate = candidate;
-                    }
-                }
-
-                if (bestCandidate != null && bestScore > MenuProbeChangeThreshold)
-                {
-                    if (now - lastMenuHighlightSpeakTime >= MenuProbeSpeakCooldownSeconds)
-                    {
-                        speechService?.Speak($"Selected: {bestCandidate.Text}", A11ySpeechPriority.Normal, "menu_highlight", true);
-                        lastMenuHighlightSpeakTime = now;
-                    }
-                }
-            }
-
-            lastMenuSnapshot = currentSnapshot.ById;
-        }
-
         private void HandleMenuProbeSnapshotHotkey()
         {
             try
@@ -176,6 +108,7 @@ namespace TLDAccessibility
                     speechService?.Speak(spokenText, A11ySpeechPriority.Critical, "menu_probe_ui_toolkit_snapshot", false);
                 }
                 LogMenuProbeDiagnostics();
+                menuSelectionTracker?.LogDiagnostics();
                 LogNguiUILabelSnapshot();
                 if (snapshot.Candidates.Count == 0)
                 {
@@ -498,6 +431,7 @@ namespace TLDAccessibility
 
             List<NguiLabelRawEntry> entries = new List<NguiLabelRawEntry>();
             int totalLabels = 0;
+            HashSet<int> seenInstanceIds = new HashSet<int>();
             Stack<Transform> stack = new Stack<Transform>();
             stack.Push(root.transform);
             while (stack.Count > 0)
@@ -515,6 +449,12 @@ namespace TLDAccessibility
                     {
                         Component component = components[i];
                         if (component == null || !NguiReflection.IsLabel(component))
+                        {
+                            continue;
+                        }
+
+                        int instanceId = component.GetInstanceID();
+                        if (!seenInstanceIds.Add(instanceId))
                         {
                             continue;
                         }
@@ -558,6 +498,7 @@ namespace TLDAccessibility
 
             int totalLabels = 0;
             List<NguiLabelRawEntry> entries = new List<NguiLabelRawEntry>();
+            HashSet<int> seenInstanceIds = new HashSet<int>();
 
             for (int i = 0; i < transforms.Count; i++)
             {
@@ -577,6 +518,12 @@ namespace TLDAccessibility
                 {
                     Component component = components[componentIndex];
                     if (component == null || !NguiReflection.IsLabel(component))
+                    {
+                        continue;
+                    }
+
+                    int instanceId = component.GetInstanceID();
+                    if (!seenInstanceIds.Add(instanceId))
                     {
                         continue;
                     }
