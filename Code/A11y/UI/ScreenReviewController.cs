@@ -269,7 +269,7 @@ namespace TLDAccessibility.A11y.UI
 
             if (IsNguiLabel(component))
             {
-                return VisibilityUtil.NormalizeText(NGUIReflection.GetUILabelText(component));
+                return VisibilityUtil.NormalizeText(NguiReflection.GetUILabelText(component));
             }
 
             return null;
@@ -277,12 +277,12 @@ namespace TLDAccessibility.A11y.UI
 
         private bool IsNguiLabel(Component component)
         {
-            return component != null && NGUIReflection.GetUILabelType() != null && component.GetType() == NGUIReflection.GetUILabelType();
+            return component != null && NguiReflection.GetUILabelType() != null && component.GetType() == NguiReflection.GetUILabelType();
         }
 
         private IEnumerable<Component> GetAllNguiLabels()
         {
-            if (!NGUIReflection.HasUILabel)
+            if (!NguiReflection.HasUILabel)
             {
                 return Enumerable.Empty<Component>();
             }

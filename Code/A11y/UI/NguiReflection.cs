@@ -1,3 +1,4 @@
+// NOTE: Keep this file and type casing as NguiReflection; do not add NGUIReflection.cs or Windows checkouts will break.
 using System;
 using System.Collections.Generic;
 using System.Reflection;
@@ -13,6 +14,17 @@ namespace TLDAccessibility.A11y.UI
         private const int DefaultChildDepth = 3;
         private const int DefaultParentDepth = 5;
 
+        private static bool uiLabelTypeChecked;
+        private static Type uiLabelType;
+        private static bool uiLabelMembersCached;
+        private static PropertyInfo uiLabelIsVisibleProperty;
+        private static FieldInfo uiLabelIsVisibleField;
+        private static PropertyInfo uiLabelEnabledProperty;
+        private static FieldInfo uiLabelEnabledField;
+        private static PropertyInfo uiLabelAlphaProperty;
+        private static FieldInfo uiLabelAlphaField;
+        private static PropertyInfo uiLabelWorldCornersProperty;
+        private static FieldInfo uiLabelWorldCornersField;
         private static bool uiCameraInitialized;
         private static Type uiCameraType;
         private static PropertyInfo selectedProperty;
@@ -70,6 +82,75 @@ namespace TLDAccessibility.A11y.UI
             return GetComponentTypeName(component) == UILabelTypeName;
         }
 
+        public static Type GetUILabelType()
+        {
+            if (uiLabelTypeChecked)
+            {
+                return uiLabelType;
+            }
+
+            uiLabelType = AccessTools.TypeByName(UILabelTypeName);
+            uiLabelTypeChecked = true;
+            return uiLabelType;
+        }
+
+        public static bool HasUILabel => GetUILabelType() != null;
+
+        public static string GetUILabelText(Component component)
+        {
+            return GetLabelText(component);
+        }
+
+        public static bool? GetUILabelIsVisible(Component component)
+        {
+            if (component == null)
+            {
+                return null;
+            }
+
+            EnsureUILabelMembers();
+            return ReadBool(component, uiLabelIsVisibleProperty, uiLabelIsVisibleField);
+        }
+
+        public static bool? GetUILabelEnabled(Component component)
+        {
+            if (component == null)
+            {
+                return null;
+            }
+
+            if (component is Behaviour behaviour)
+            {
+                return behaviour.enabled;
+            }
+
+            EnsureUILabelMembers();
+            return ReadBool(component, uiLabelEnabledProperty, uiLabelEnabledField);
+        }
+
+        public static float? GetUILabelAlpha(Component component)
+        {
+            if (component == null)
+            {
+                return null;
+            }
+
+            EnsureUILabelMembers();
+            return ReadFloat(component, uiLabelAlphaProperty, uiLabelAlphaField);
+        }
+
+        public static Vector3[] GetUILabelWorldCorners(Component component)
+        {
+            if (component == null)
+            {
+                return null;
+            }
+
+            EnsureUILabelMembers();
+            object value = uiLabelWorldCornersProperty?.GetValue(component) ?? uiLabelWorldCornersField?.GetValue(component);
+            return value as Vector3[];
+        }
+
         public static string GetLabelText(Component component)
         {
             if (component == null)
@@ -88,6 +169,53 @@ namespace TLDAccessibility.A11y.UI
             if (field != null)
             {
                 return ConvertToString(field.GetValue(component));
+            }
+
+            return null;
+        }
+
+        private static void EnsureUILabelMembers()
+        {
+            if (uiLabelMembersCached)
+            {
+                return;
+            }
+
+            Type type = GetUILabelType();
+            if (type == null)
+            {
+                uiLabelMembersCached = true;
+                return;
+            }
+
+            uiLabelIsVisibleProperty = type.GetProperty("isVisible", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            uiLabelIsVisibleField = type.GetField("isVisible", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            uiLabelEnabledProperty = type.GetProperty("enabled", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            uiLabelEnabledField = type.GetField("enabled", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            uiLabelAlphaProperty = type.GetProperty("alpha", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            uiLabelAlphaField = type.GetField("alpha", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            uiLabelWorldCornersProperty = type.GetProperty("worldCorners", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            uiLabelWorldCornersField = type.GetField("worldCorners", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            uiLabelMembersCached = true;
+        }
+
+        private static bool? ReadBool(Component component, PropertyInfo property, FieldInfo field)
+        {
+            object value = property?.GetValue(component) ?? field?.GetValue(component);
+            if (value is bool boolValue)
+            {
+                return boolValue;
+            }
+
+            return null;
+        }
+
+        private static float? ReadFloat(Component component, PropertyInfo property, FieldInfo field)
+        {
+            object value = property?.GetValue(component) ?? field?.GetValue(component);
+            if (value is float floatValue)
+            {
+                return floatValue;
             }
 
             return null;
