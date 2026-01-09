@@ -30,6 +30,7 @@ namespace TLDAccessibility
         private const float MenuProbeSpeakCooldownSeconds = 0.25f;
         private const float MenuProbeChangeThreshold = 0.5f;
         private const int NguiLabelSnapshotLimit = 20;
+        private static bool nguiLabelEntryExceptionLogged;
 
         public override void OnInitializeMelon()
         {
@@ -597,15 +598,37 @@ namespace TLDAccessibility
 
         private static NguiLabelRawEntry BuildNguiLabelRawEntry(Component component, Transform transform)
         {
-            NguiReflection.TryGetUILabelTextDetails(component, out string rawText, out string processedText, out string localizeTerm);
-            int rawLength = rawText?.Length ?? 0;
-            int processedLength = processedText?.Length ?? 0;
-            string sampleSource = !string.IsNullOrWhiteSpace(processedText) ? processedText : rawText;
-            string sample = string.IsNullOrWhiteSpace(sampleSource) ? string.Empty : TrimSnapshotText(VisibilityUtil.NormalizeText(sampleSource) ?? sampleSource);
-            bool activeInHierarchy = transform.gameObject.activeInHierarchy;
-            bool? enabled = NguiReflection.GetUILabelEnabled(component);
-            string enabledState = enabled.HasValue ? (enabled.Value ? "true" : "false") : "unknown";
             string path = MenuProbe.BuildHierarchyPath(transform);
+            bool activeInHierarchy = transform.gameObject.activeInHierarchy;
+            string enabledState = "unknown";
+            int rawLength = 0;
+            int processedLength = 0;
+            string sample = string.Empty;
+            string localizeTerm = null;
+
+            try
+            {
+                if (NguiReflection.TryGetUILabelTextDetails(component, out string rawText, out string processedText, out localizeTerm))
+                {
+                    rawLength = rawText?.Length ?? 0;
+                    processedLength = processedText?.Length ?? 0;
+                    string sampleSource = !string.IsNullOrWhiteSpace(processedText) ? processedText : rawText;
+                    sample = string.IsNullOrWhiteSpace(sampleSource)
+                        ? string.Empty
+                        : TrimSnapshotText(VisibilityUtil.NormalizeText(sampleSource) ?? sampleSource);
+                }
+
+                bool? enabled = NguiReflection.GetUILabelEnabled(component);
+                enabledState = enabled.HasValue ? (enabled.Value ? "true" : "false") : "unknown";
+            }
+            catch (Exception ex)
+            {
+                if (!nguiLabelEntryExceptionLogged)
+                {
+                    nguiLabelEntryExceptionLogged = true;
+                    A11yLogger.Info($"MenuProbe NGUI UILabel entry failed: {ex.GetType().Name}: {ex.Message}");
+                }
+            }
 
             return new NguiLabelRawEntry(path, activeInHierarchy, enabledState, rawLength, processedLength, sample, localizeTerm);
         }
