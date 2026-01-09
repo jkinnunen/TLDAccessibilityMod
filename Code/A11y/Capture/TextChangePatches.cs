@@ -109,7 +109,7 @@ namespace TLDAccessibility.A11y.Capture
 
         private static void PatchNgui(HarmonyLib.Harmony harmony)
         {
-            Type uiLabelType = NGUIReflection.GetUILabelType();
+            Type uiLabelType = NguiReflection.GetUILabelType();
             if (uiLabelType == null)
             {
                 return;

@@ -241,30 +241,30 @@ namespace TLDAccessibility.A11y.UI
 
         private static bool IsNguiLabel(Component component)
         {
-            return component != null && NGUIReflection.GetUILabelType() != null && component.GetType() == NGUIReflection.GetUILabelType();
+            return component != null && NguiReflection.GetUILabelType() != null && component.GetType() == NguiReflection.GetUILabelType();
         }
 
         private static bool IsNguiLabelVisible(Component component, bool allowUnknown)
         {
-            bool? isVisible = NGUIReflection.GetUILabelIsVisible(component);
+            bool? isVisible = NguiReflection.GetUILabelIsVisible(component);
             if (isVisible.HasValue)
             {
                 return isVisible.Value;
             }
 
-            bool? enabled = NGUIReflection.GetUILabelEnabled(component);
+            bool? enabled = NguiReflection.GetUILabelEnabled(component);
             if (enabled.HasValue && !enabled.Value)
             {
                 return false;
             }
 
-            float? alpha = NGUIReflection.GetUILabelAlpha(component);
+            float? alpha = NguiReflection.GetUILabelAlpha(component);
             if (alpha.HasValue && alpha.Value <= AlphaThreshold)
             {
                 return false;
             }
 
-            Vector3[] corners = NGUIReflection.GetUILabelWorldCorners(component);
+            Vector3[] corners = NguiReflection.GetUILabelWorldCorners(component);
             if (corners != null && corners.Length >= 4)
             {
                 Rect rect = GetRectFromCorners(corners);

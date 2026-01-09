@@ -91,7 +91,7 @@ namespace TLDAccessibility.A11y.UI
             Component ngui = GetNguiLabel(target);
             if (ngui != null && VisibilityUtil.IsElementVisible(ngui, false))
             {
-                string text = VisibilityUtil.NormalizeText(NGUIReflection.GetUILabelText(ngui));
+                string text = VisibilityUtil.NormalizeText(NguiReflection.GetUILabelText(ngui));
                 if (!VisibilityUtil.IsGarbageText(text))
                 {
                     source = ngui;
@@ -167,7 +167,7 @@ namespace TLDAccessibility.A11y.UI
                     continue;
                 }
 
-                string text = VisibilityUtil.NormalizeText(NGUIReflection.GetUILabelText(child));
+                string text = VisibilityUtil.NormalizeText(NguiReflection.GetUILabelText(child));
                 if (VisibilityUtil.IsGarbageText(text))
                 {
                     continue;
@@ -516,7 +516,7 @@ namespace TLDAccessibility.A11y.UI
 
             if (IsNguiLabel(component))
             {
-                Vector3[] corners = NGUIReflection.GetUILabelWorldCorners(component);
+                Vector3[] corners = NguiReflection.GetUILabelWorldCorners(component);
                 if (corners != null && corners.Length >= 4)
                 {
                     Vector2 min = new Vector2(float.MaxValue, float.MaxValue);
@@ -550,7 +550,7 @@ namespace TLDAccessibility.A11y.UI
 
             if (IsNguiLabel(component))
             {
-                return VisibilityUtil.NormalizeText(NGUIReflection.GetUILabelText(component));
+                return VisibilityUtil.NormalizeText(NguiReflection.GetUILabelText(component));
             }
 
             return null;
@@ -570,7 +570,7 @@ namespace TLDAccessibility.A11y.UI
 
         private static IEnumerable<Component> GetAllVisibleNguiLabels()
         {
-            if (!NGUIReflection.HasUILabel)
+            if (!NguiReflection.HasUILabel)
             {
                 return Enumerable.Empty<Component>();
             }
@@ -581,12 +581,12 @@ namespace TLDAccessibility.A11y.UI
 
         private static Component GetNguiLabel(GameObject target)
         {
-            if (target == null || !NGUIReflection.HasUILabel)
+            if (target == null || !NguiReflection.HasUILabel)
             {
                 return null;
             }
 
-            Component component = TmpReflection.GetComponentByType(target, NGUIReflection.GetUILabelType());
+            Component component = TmpReflection.GetComponentByType(target, NguiReflection.GetUILabelType());
             if (component != null)
             {
                 return component;
@@ -597,7 +597,7 @@ namespace TLDAccessibility.A11y.UI
 
         private static bool IsNguiLabel(Component component)
         {
-            return component != null && NGUIReflection.GetUILabelType() != null && component.GetType() == NGUIReflection.GetUILabelType();
+            return component != null && NguiReflection.GetUILabelType() != null && component.GetType() == NguiReflection.GetUILabelType();
         }
 
         private sealed class CandidateLabel
