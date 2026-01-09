@@ -223,41 +223,7 @@ namespace TLDAccessibility.A11y.UI
                 return null;
             }
 
-            Type type = assembly.GetType(typeName, false);
-            if (type != null)
-            {
-                return type;
-            }
-
-            Type[] types;
-            try
-            {
-                types = assembly.GetTypes();
-            }
-            catch (ReflectionTypeLoadException ex)
-            {
-                types = ex.Types;
-            }
-
-            if (types == null)
-            {
-                return null;
-            }
-
-            foreach (Type candidate in types)
-            {
-                if (candidate == null)
-                {
-                    continue;
-                }
-
-                if (string.Equals(candidate.FullName, typeName, StringComparison.Ordinal))
-                {
-                    return candidate;
-                }
-            }
-
-            return null;
+            return assembly.GetType(typeName, false);
         }
 
         private static void EnsureTmpTextMembers()

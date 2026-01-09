@@ -348,10 +348,103 @@ namespace TLDAccessibility
         private static void LogMenuProbeDiagnostics()
         {
             LogEventSystemDiagnostics();
+            LogNguiSelectionDiagnostics();
             LogCameraCensus();
             List<Transform> transforms = FindAllTransforms();
             LogSceneDistribution(transforms);
             LogComponentHistogramAndKeywords(transforms);
+        }
+
+        private static void LogNguiSelectionDiagnostics()
+        {
+            NguiReflection.UiCameraStatus status = NguiReflection.GetUiCameraStatus();
+            A11yLogger.Info(
+                $"MenuProbe NGUI: UICamera type exists={status.TypeExists}, selectedReadable={status.SelectedReadable}, hoveredReadable={status.HoveredReadable}");
+
+            GameObject selectedObject = NguiReflection.GetSelectedObject();
+            GameObject hoveredObject = NguiReflection.GetHoveredObject();
+            string selectedName = selectedObject != null ? selectedObject.name : "(null)";
+            string selectedPath = selectedObject != null ? MenuProbe.BuildHierarchyPath(selectedObject.transform) : "(null)";
+            string hoveredName = hoveredObject != null ? hoveredObject.name : "(null)";
+            string hoveredPath = hoveredObject != null ? MenuProbe.BuildHierarchyPath(hoveredObject.transform) : "(null)";
+
+            A11yLogger.Info($"MenuProbe NGUI: selectedObject={selectedName}, path={selectedPath}");
+            A11yLogger.Info($"MenuProbe NGUI: hoveredObject={hoveredName}, path={hoveredPath}");
+
+            GameObject resolved = selectedObject ?? hoveredObject;
+            if (resolved == null)
+            {
+                A11yLogger.Info("MenuProbe NGUI: no selected or hovered object to scan for UILabel text.");
+                return;
+            }
+
+            if (!NguiReflection.HasUILabel)
+            {
+                A11yLogger.Info("MenuProbe NGUI: UILabel binding not available.");
+                return;
+            }
+
+            List<string> labelTexts = CollectNguiLabelTexts(resolved, 10);
+            if (labelTexts.Count == 0)
+            {
+                A11yLogger.Info("MenuProbe NGUI: selected object has no UILabel text children.");
+                return;
+            }
+
+            for (int i = 0; i < labelTexts.Count; i++)
+            {
+                A11yLogger.Info($"MenuProbe NGUI UILabel[{i + 1}]: \"{labelTexts[i]}\"");
+            }
+        }
+
+        private static List<string> CollectNguiLabelTexts(GameObject root, int limit)
+        {
+            List<string> results = new List<string>();
+            if (root == null || limit <= 0)
+            {
+                return results;
+            }
+
+            Stack<Transform> stack = new Stack<Transform>();
+            stack.Push(root.transform);
+            while (stack.Count > 0 && results.Count < limit)
+            {
+                Transform current = stack.Pop();
+                if (current == null)
+                {
+                    continue;
+                }
+
+                Component[] components = current.gameObject.GetComponents<Component>();
+                if (components != null)
+                {
+                    for (int i = 0; i < components.Length && results.Count < limit; i++)
+                    {
+                        Component component = components[i];
+                        if (component == null || !NguiReflection.IsLabel(component))
+                        {
+                            continue;
+                        }
+
+                        string text = NguiReflection.GetLabelText(component);
+                        text = VisibilityUtil.NormalizeText(text);
+                        if (string.IsNullOrWhiteSpace(text))
+                        {
+                            continue;
+                        }
+
+                        results.Add(TrimSnapshotText(text));
+                    }
+                }
+
+                int childCount = current.childCount;
+                for (int childIndex = 0; childIndex < childCount; childIndex++)
+                {
+                    stack.Push(current.GetChild(childIndex));
+                }
+            }
+
+            return results;
         }
 
         private static void LogNguiUILabelSnapshot()
