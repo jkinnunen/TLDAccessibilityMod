@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Reflection;
 using HarmonyLib;
+using Il2CppInterop.Runtime.InteropTypes;
 using TLDAccessibility.A11y.Logging;
 using UnityEngine;
 
@@ -49,6 +50,7 @@ namespace TLDAccessibility.A11y.UI
         private static bool hoveredGetterMissingLogged;
         private static bool selectedGetterExceptionLogged;
         private static bool hoveredGetterExceptionLogged;
+        private static bool uiLabelTextExceptionLogged;
         private static readonly HashSet<int> loggedLocalizeLabels = new HashSet<int>();
 
         internal readonly struct UiCameraStatus
@@ -223,7 +225,11 @@ namespace TLDAccessibility.A11y.UI
                 return null;
             }
 
-            TryGetUILabelTextDetails(component, out string rawText, out string processedText, out string localizeTerm);
+            if (!TryGetUILabelTextDetails(component, out string rawText, out string processedText, out string localizeTerm))
+            {
+                return null;
+            }
+
             string text = !string.IsNullOrWhiteSpace(rawText) ? rawText : processedText;
             if (string.IsNullOrWhiteSpace(text) && !string.IsNullOrWhiteSpace(localizeTerm))
             {
@@ -233,7 +239,7 @@ namespace TLDAccessibility.A11y.UI
             return text;
         }
 
-        public static void TryGetUILabelTextDetails(Component component, out string rawText, out string processedText, out string localizeTerm)
+        public static bool TryGetUILabelTextDetails(Component component, out string rawText, out string processedText, out string localizeTerm)
         {
             rawText = null;
             processedText = null;
@@ -241,40 +247,75 @@ namespace TLDAccessibility.A11y.UI
 
             if (component == null)
             {
-                return;
+                return false;
             }
 
-            EnsureUILabelMembers();
-            rawText = ConvertToString(uiLabelTextProperty?.GetValue(component) ?? uiLabelTextField?.GetValue(component));
-            processedText = ConvertToString(uiLabelProcessedTextProperty?.GetValue(component) ?? uiLabelProcessedTextField?.GetValue(component));
-
-            if (rawText == null || processedText == null)
+            if (!IsLabel(component))
             {
+                return false;
+            }
+
+            try
+            {
+                var uiLabel = component.TryCast<global::Il2Cpp.UILabel>();
+                if (uiLabel != null)
+                {
+                    rawText = ConvertToString(uiLabel.text);
+                    processedText = ConvertToString(uiLabel.processedText);
+                    localizeTerm = GetUILocalizeTerm(component.gameObject);
+                    return true;
+                }
+
                 Type type = component.GetType();
+                EnsureUILabelMembers();
+                rawText = ConvertToString(ReadMemberValue(component, type, uiLabelTextProperty, uiLabelTextField));
+                processedText = ConvertToString(ReadMemberValue(component, type, uiLabelProcessedTextProperty, uiLabelProcessedTextField));
+
                 if (rawText == null)
                 {
                     PropertyInfo property = type.GetProperty("text", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-                    rawText = ConvertToString(property?.GetValue(component));
+                    rawText = ConvertToString(ReadMemberValue(component, type, property, null));
                     if (rawText == null)
                     {
                         FieldInfo field = type.GetField("text", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-                        rawText = ConvertToString(field?.GetValue(component));
+                        rawText = ConvertToString(ReadMemberValue(component, type, null, field));
                     }
                 }
 
                 if (processedText == null)
                 {
                     PropertyInfo property = type.GetProperty("processedText", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-                    processedText = ConvertToString(property?.GetValue(component));
+                    processedText = ConvertToString(ReadMemberValue(component, type, property, null));
                     if (processedText == null)
                     {
                         FieldInfo field = type.GetField("processedText", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-                        processedText = ConvertToString(field?.GetValue(component));
+                        processedText = ConvertToString(ReadMemberValue(component, type, null, field));
                     }
                 }
-            }
 
-            localizeTerm = GetUILocalizeTerm(component.gameObject);
+                localizeTerm = GetUILocalizeTerm(component.gameObject);
+                return true;
+            }
+            catch (TargetException ex)
+            {
+                LogOnce(ref uiLabelTextExceptionLogged, $"NGUI: UILabel text reflection failed: {ex.GetType().Name}: {ex.Message}");
+                return false;
+            }
+            catch (ArgumentException ex)
+            {
+                LogOnce(ref uiLabelTextExceptionLogged, $"NGUI: UILabel text reflection failed: {ex.GetType().Name}: {ex.Message}");
+                return false;
+            }
+            catch (NullReferenceException ex)
+            {
+                LogOnce(ref uiLabelTextExceptionLogged, $"NGUI: UILabel text reflection failed: {ex.GetType().Name}: {ex.Message}");
+                return false;
+            }
+            catch (Exception ex)
+            {
+                LogOnce(ref uiLabelTextExceptionLogged, $"NGUI: UILabel text reflection failed: {ex.GetType().Name}: {ex.Message}");
+                return false;
+            }
         }
 
         private static void EnsureUILabelMembers()
@@ -304,6 +345,26 @@ namespace TLDAccessibility.A11y.UI
             uiLabelWorldCornersProperty = type.GetProperty("worldCorners", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
             uiLabelWorldCornersField = type.GetField("worldCorners", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
             uiLabelMembersCached = true;
+        }
+
+        private static object ReadMemberValue(Component component, Type componentType, PropertyInfo property, FieldInfo field)
+        {
+            if (component == null || componentType == null)
+            {
+                return null;
+            }
+
+            if (property != null && property.DeclaringType != null && property.DeclaringType.IsAssignableFrom(componentType))
+            {
+                return property.GetValue(component);
+            }
+
+            if (field != null && field.DeclaringType != null && field.DeclaringType.IsAssignableFrom(componentType))
+            {
+                return field.GetValue(component);
+            }
+
+            return null;
         }
 
         private static void EnsureUILocalizeMembers()
