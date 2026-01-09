@@ -435,7 +435,7 @@ namespace TLDAccessibility.A11y.UI
             return uiLocalizeType;
         }
 
-        private static string GetUILocalizeTerm(GameObject target)
+        internal static string GetUILocalizeTerm(GameObject target)
         {
             if (target == null)
             {
