@@ -674,7 +674,8 @@ namespace TLDAccessibility.A11y.UI
 
                     if (tmpType != null)
                     {
-                        Component[] tmpFound = root.GetComponentsInChildren(tmpType, true);
+                        Il2CppSystem.Type tmpIl2CppType = Il2CppInterop.Runtime.Il2CppType.From(tmpType);
+                        Component[] tmpFound = root.GetComponentsInChildren(tmpIl2CppType, true);
                         if (tmpFound != null && tmpFound.Length > 0)
                         {
                             result.TmpComponents.AddRange(tmpFound);
