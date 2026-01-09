@@ -154,9 +154,9 @@ namespace TLDAccessibility
         {
             try
             {
-                A11yLogger.Info("[TLDAccessibility] MenuProbe DEEP CENSUS MARKER v1 (F10 handler entered)");
+                A11yLogger.Info("MenuProbe DEEP CENSUS MARKER v1 (Ctrl+Alt+Shift+F10 handler entered)");
                 string sceneName = SceneManager.GetActiveScene().name;
-                A11yLogger.Info($"[TLDAccessibility] MenuProbe marker: scene={sceneName} time={Time.unscaledTime}");
+                A11yLogger.Info($"MenuProbe marker: scene={sceneName} time={Time.unscaledTime}");
 
                 if (menuProbe == null)
                 {
@@ -217,7 +217,7 @@ namespace TLDAccessibility
             }
             catch (Exception ex)
             {
-                A11yLogger.Info($"[TLDAccessibility] MenuProbe marker: exception: {ex}");
+                A11yLogger.Info($"MenuProbe marker: exception: {ex}");
             }
         }
 
