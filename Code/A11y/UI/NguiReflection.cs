@@ -55,6 +55,15 @@ namespace TLDAccessibility.A11y.UI
         private static readonly HashSet<string> uiLabelTargetExceptionCallSites = new HashSet<string>();
         private static readonly HashSet<int> loggedLocalizeLabels = new HashSet<int>();
         private static bool nonUILabelLogged;
+        private static readonly Dictionary<Type, UILabelTextMembers> uiLabelTextMembersByType = new Dictionary<Type, UILabelTextMembers>();
+
+        private sealed class UILabelTextMembers
+        {
+            public PropertyInfo TextProperty { get; set; }
+            public FieldInfo TextField { get; set; }
+            public PropertyInfo ProcessedProperty { get; set; }
+            public FieldInfo ProcessedField { get; set; }
+        }
 
         internal readonly struct UiCameraStatus
         {
@@ -269,7 +278,8 @@ namespace TLDAccessibility.A11y.UI
                 return false;
             }
 
-            if (!IsUILabelComponent(component))
+            string runtimeName = GetComponentTypeName(component);
+            if (!string.Equals(runtimeName, UILabelTypeName, StringComparison.Ordinal))
             {
                 LogNonUILabelOnce(component);
                 return false;
@@ -287,14 +297,9 @@ namespace TLDAccessibility.A11y.UI
                 }
 
                 Type runtimeType = component.GetType();
-                Type labelType = GetUILabelType();
-                PropertyInfo textProperty = GetUILabelProperty(runtimeType, labelType, "text");
-                FieldInfo textField = GetUILabelField(runtimeType, labelType, "text");
-                rawText = ConvertToString(ReadMemberValue(component, runtimeType, textProperty, textField));
-
-                PropertyInfo processedProperty = GetUILabelProperty(runtimeType, labelType, "processedText");
-                FieldInfo processedField = GetUILabelField(runtimeType, labelType, "processedText");
-                processedText = ConvertToString(ReadMemberValue(component, runtimeType, processedProperty, processedField));
+                UILabelTextMembers members = GetUILabelTextMembers(runtimeType);
+                rawText = ConvertToString(ReadMemberValue(component, runtimeType, members.TextProperty, members.TextField));
+                processedText = ConvertToString(ReadMemberValue(component, runtimeType, members.ProcessedProperty, members.ProcessedField));
 
                 localizeTerm = GetUILocalizeTerm(component.gameObject);
                 return true;
@@ -319,6 +324,30 @@ namespace TLDAccessibility.A11y.UI
                 LogOnce(ref uiLabelTextExceptionLogged, $"NGUI: UILabel text reflection failed: {ex.GetType().Name}: {ex.Message}");
                 return false;
             }
+        }
+
+        private static UILabelTextMembers GetUILabelTextMembers(Type runtimeType)
+        {
+            if (runtimeType == null)
+            {
+                return new UILabelTextMembers();
+            }
+
+            if (uiLabelTextMembersByType.TryGetValue(runtimeType, out UILabelTextMembers cached))
+            {
+                return cached;
+            }
+
+            UILabelTextMembers members = new UILabelTextMembers
+            {
+                TextProperty = runtimeType.GetProperty("text", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic),
+                TextField = runtimeType.GetField("text", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic),
+                ProcessedProperty = runtimeType.GetProperty("processedText", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic),
+                ProcessedField = runtimeType.GetField("processedText", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+            };
+
+            uiLabelTextMembersByType[runtimeType] = members;
+            return members;
         }
 
         private static void EnsureUILabelMembers()
