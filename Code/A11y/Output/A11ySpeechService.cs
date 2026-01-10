@@ -9,6 +9,22 @@ namespace TLDAccessibility.A11y.Output
 {
     internal sealed class A11ySpeechService
     {
+        internal enum SpeechSuppressionReason
+        {
+            None,
+            EmptyText,
+            CooldownText,
+            CooldownSource,
+            AutoRateLimit,
+            Exception
+        }
+
+        internal sealed class SpeechRequestOptions
+        {
+            public bool BypassCooldown { get; set; }
+            public bool BypassAutoRateLimit { get; set; }
+        }
+
         private readonly IA11ySpeechBackend primaryBackend;
         private readonly IA11ySpeechBackend fallbackBackend;
         private readonly Queue<SpokenItem> queue = new Queue<SpokenItem>();
@@ -53,48 +69,80 @@ namespace TLDAccessibility.A11y.Output
 
         public void Speak(string text, A11ySpeechPriority priority, string sourceId = null, bool isAuto = false)
         {
-            if (string.IsNullOrWhiteSpace(text))
-            {
-                return;
-            }
+            TrySpeak(text, priority, sourceId, isAuto, out _, null);
+        }
 
-            float now = Time.unscaledTime;
-            float cooldown = Settings.Instance.CooldownSeconds;
-            if (lastTextTimes.TryGetValue(text, out float lastTextTime) && now - lastTextTime < cooldown)
-            {
-                return;
-            }
+        public bool TrySpeak(
+            string text,
+            A11ySpeechPriority priority,
+            string sourceId,
+            bool isAuto,
+            out SpeechSuppressionReason suppressionReason,
+            SpeechRequestOptions options)
+        {
+            suppressionReason = SpeechSuppressionReason.None;
 
-            if (!string.IsNullOrWhiteSpace(sourceId) && lastSourceTimes.TryGetValue(sourceId, out float lastSourceTime))
+            try
             {
-                if (now - lastSourceTime < cooldown)
+                if (string.IsNullOrWhiteSpace(text))
                 {
-                    return;
+                    suppressionReason = SpeechSuppressionReason.EmptyText;
+                    return false;
                 }
+
+                float now = Time.unscaledTime;
+                float cooldown = Settings.Instance.CooldownSeconds;
+                bool bypassCooldown = options?.BypassCooldown ?? false;
+                if (!bypassCooldown)
+                {
+                    if (lastTextTimes.TryGetValue(text, out float lastTextTime) && now - lastTextTime < cooldown)
+                    {
+                        suppressionReason = SpeechSuppressionReason.CooldownText;
+                        return false;
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(sourceId) && lastSourceTimes.TryGetValue(sourceId, out float lastSourceTime))
+                    {
+                        if (now - lastSourceTime < cooldown)
+                        {
+                            suppressionReason = SpeechSuppressionReason.CooldownSource;
+                            return false;
+                        }
+                    }
+                }
+
+                bool bypassAutoRateLimit = options?.BypassAutoRateLimit ?? false;
+                if (isAuto && !bypassAutoRateLimit && !CanAutoSpeak(now))
+                {
+                    suppressionReason = SpeechSuppressionReason.AutoRateLimit;
+                    return false;
+                }
+
+                SpokenItem item = new SpokenItem
+                {
+                    Text = text,
+                    Priority = priority,
+                    SourceId = sourceId,
+                    IsAuto = isAuto,
+                    EnqueueTime = now
+                };
+
+                if (priority == A11ySpeechPriority.Critical)
+                {
+                    queue.Clear();
+                    SpeakInternal(item);
+                    return true;
+                }
+
+                Enqueue(item);
+                return true;
             }
-
-            if (isAuto && !CanAutoSpeak(now))
+            catch (Exception ex)
             {
-                return;
+                suppressionReason = SpeechSuppressionReason.Exception;
+                A11yLogger.Warning($"Speech request failed: {ex}");
+                return false;
             }
-
-            SpokenItem item = new SpokenItem
-            {
-                Text = text,
-                Priority = priority,
-                SourceId = sourceId,
-                IsAuto = isAuto,
-                EnqueueTime = now
-            };
-
-            if (priority == A11ySpeechPriority.Critical)
-            {
-                queue.Clear();
-                SpeakInternal(item);
-                return;
-            }
-
-            Enqueue(item);
         }
 
         public void Stop()
