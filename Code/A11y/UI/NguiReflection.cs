@@ -24,19 +24,6 @@ namespace TLDAccessibility.A11y.UI
         private static Type uiButtonType;
         private static bool uiLocalizeTypeChecked;
         private static Type uiLocalizeType;
-        private static bool uiLabelMembersCached;
-        private static PropertyInfo uiLabelTextProperty;
-        private static FieldInfo uiLabelTextField;
-        private static PropertyInfo uiLabelProcessedTextProperty;
-        private static FieldInfo uiLabelProcessedTextField;
-        private static PropertyInfo uiLabelIsVisibleProperty;
-        private static FieldInfo uiLabelIsVisibleField;
-        private static PropertyInfo uiLabelEnabledProperty;
-        private static FieldInfo uiLabelEnabledField;
-        private static PropertyInfo uiLabelAlphaProperty;
-        private static FieldInfo uiLabelAlphaField;
-        private static PropertyInfo uiLabelWorldCornersProperty;
-        private static FieldInfo uiLabelWorldCornersField;
         private static bool uiLocalizeMembersCached;
         private static PropertyInfo uiLocalizeKeyProperty;
         private static FieldInfo uiLocalizeKeyField;
@@ -55,14 +42,22 @@ namespace TLDAccessibility.A11y.UI
         private static readonly HashSet<string> uiLabelTargetExceptionCallSites = new HashSet<string>();
         private static readonly HashSet<int> loggedLocalizeLabels = new HashSet<int>();
         private static bool nonUILabelLogged;
-        private static readonly Dictionary<Type, UILabelTextMembers> uiLabelTextMembersByType = new Dictionary<Type, UILabelTextMembers>();
+        private static readonly Dictionary<Type, UILabelMembers> uiLabelMembersByType = new Dictionary<Type, UILabelMembers>();
 
-        private sealed class UILabelTextMembers
+        private sealed class UILabelMembers
         {
             public PropertyInfo TextProperty { get; set; }
             public FieldInfo TextField { get; set; }
             public PropertyInfo ProcessedProperty { get; set; }
             public FieldInfo ProcessedField { get; set; }
+            public PropertyInfo IsVisibleProperty { get; set; }
+            public FieldInfo IsVisibleField { get; set; }
+            public PropertyInfo EnabledProperty { get; set; }
+            public FieldInfo EnabledField { get; set; }
+            public PropertyInfo AlphaProperty { get; set; }
+            public FieldInfo AlphaField { get; set; }
+            public PropertyInfo WorldCornersProperty { get; set; }
+            public FieldInfo WorldCornersField { get; set; }
         }
 
         internal readonly struct UiCameraStatus
@@ -188,10 +183,8 @@ namespace TLDAccessibility.A11y.UI
             }
 
             Type runtimeType = component.GetType();
-            EnsureUILabelMembers();
-            PropertyInfo property = ResolveProperty(runtimeType, uiLabelIsVisibleProperty, "isVisible");
-            FieldInfo field = ResolveField(runtimeType, uiLabelIsVisibleField, "isVisible");
-            return ReadBool(component, property, field);
+            UILabelMembers members = GetUILabelMembers(runtimeType);
+            return ReadBool(component, members.IsVisibleProperty, members.IsVisibleField);
         }
 
         public static bool? GetUILabelEnabled(Component component)
@@ -207,10 +200,8 @@ namespace TLDAccessibility.A11y.UI
             }
 
             Type runtimeType = component.GetType();
-            EnsureUILabelMembers();
-            PropertyInfo property = ResolveProperty(runtimeType, uiLabelEnabledProperty, "enabled");
-            FieldInfo field = ResolveField(runtimeType, uiLabelEnabledField, "enabled");
-            return ReadBool(component, property, field);
+            UILabelMembers members = GetUILabelMembers(runtimeType);
+            return ReadBool(component, members.EnabledProperty, members.EnabledField);
         }
 
         public static float? GetUILabelAlpha(Component component)
@@ -221,10 +212,8 @@ namespace TLDAccessibility.A11y.UI
             }
 
             Type runtimeType = component.GetType();
-            EnsureUILabelMembers();
-            PropertyInfo property = ResolveProperty(runtimeType, uiLabelAlphaProperty, "alpha");
-            FieldInfo field = ResolveField(runtimeType, uiLabelAlphaField, "alpha");
-            return ReadFloat(component, property, field);
+            UILabelMembers members = GetUILabelMembers(runtimeType);
+            return ReadFloat(component, members.AlphaProperty, members.AlphaField);
         }
 
         public static Vector3[] GetUILabelWorldCorners(Component component)
@@ -235,10 +224,8 @@ namespace TLDAccessibility.A11y.UI
             }
 
             Type runtimeType = component.GetType();
-            EnsureUILabelMembers();
-            PropertyInfo property = ResolveProperty(runtimeType, uiLabelWorldCornersProperty, "worldCorners");
-            FieldInfo field = ResolveField(runtimeType, uiLabelWorldCornersField, "worldCorners");
-            return ReadMemberValue(component, runtimeType, property, field) as Vector3[];
+            UILabelMembers members = GetUILabelMembers(runtimeType);
+            return ReadMemberValue(component, runtimeType, members.WorldCornersProperty, members.WorldCornersField) as Vector3[];
         }
 
         public static string GetLabelText(Component component)
@@ -297,7 +284,7 @@ namespace TLDAccessibility.A11y.UI
                 }
 
                 Type runtimeType = component.GetType();
-                UILabelTextMembers members = GetUILabelTextMembers(runtimeType);
+                UILabelMembers members = GetUILabelMembers(runtimeType);
                 rawText = ConvertToString(ReadMemberValue(component, runtimeType, members.TextProperty, members.TextField));
                 processedText = ConvertToString(ReadMemberValue(component, runtimeType, members.ProcessedProperty, members.ProcessedField));
 
@@ -326,99 +313,37 @@ namespace TLDAccessibility.A11y.UI
             }
         }
 
-        private static UILabelTextMembers GetUILabelTextMembers(Type runtimeType)
+        private static UILabelMembers GetUILabelMembers(Type runtimeType)
         {
             if (runtimeType == null)
             {
-                return new UILabelTextMembers();
+                return new UILabelMembers();
             }
 
-            if (uiLabelTextMembersByType.TryGetValue(runtimeType, out UILabelTextMembers cached))
+            if (uiLabelMembersByType.TryGetValue(runtimeType, out UILabelMembers cached))
             {
                 return cached;
             }
 
-            UILabelTextMembers members = new UILabelTextMembers
+            Type labelType = GetUILabelType();
+            UILabelMembers members = new UILabelMembers
             {
-                TextProperty = runtimeType.GetProperty("text", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic),
-                TextField = runtimeType.GetField("text", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic),
-                ProcessedProperty = runtimeType.GetProperty("processedText", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic),
-                ProcessedField = runtimeType.GetField("processedText", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                TextProperty = ResolveUILabelProperty(runtimeType, labelType, "text"),
+                TextField = ResolveUILabelField(runtimeType, labelType, "text"),
+                ProcessedProperty = ResolveUILabelProperty(runtimeType, labelType, "processedText"),
+                ProcessedField = ResolveUILabelField(runtimeType, labelType, "processedText"),
+                IsVisibleProperty = ResolveUILabelProperty(runtimeType, labelType, "isVisible"),
+                IsVisibleField = ResolveUILabelField(runtimeType, labelType, "isVisible"),
+                EnabledProperty = ResolveUILabelProperty(runtimeType, labelType, "enabled"),
+                EnabledField = ResolveUILabelField(runtimeType, labelType, "enabled"),
+                AlphaProperty = ResolveUILabelProperty(runtimeType, labelType, "alpha"),
+                AlphaField = ResolveUILabelField(runtimeType, labelType, "alpha"),
+                WorldCornersProperty = ResolveUILabelProperty(runtimeType, labelType, "worldCorners"),
+                WorldCornersField = ResolveUILabelField(runtimeType, labelType, "worldCorners")
             };
 
-            uiLabelTextMembersByType[runtimeType] = members;
+            uiLabelMembersByType[runtimeType] = members;
             return members;
-        }
-
-        private static void EnsureUILabelMembers()
-        {
-            if (uiLabelMembersCached)
-            {
-                return;
-            }
-
-            Type type = GetUILabelType();
-            if (type == null)
-            {
-                uiLabelMembersCached = true;
-                return;
-            }
-
-            uiLabelTextProperty = type.GetProperty("text", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-            uiLabelTextField = type.GetField("text", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-            uiLabelProcessedTextProperty = type.GetProperty("processedText", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-            uiLabelProcessedTextField = type.GetField("processedText", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-            uiLabelIsVisibleProperty = type.GetProperty("isVisible", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-            uiLabelIsVisibleField = type.GetField("isVisible", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-            uiLabelEnabledProperty = type.GetProperty("enabled", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-            uiLabelEnabledField = type.GetField("enabled", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-            uiLabelAlphaProperty = type.GetProperty("alpha", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-            uiLabelAlphaField = type.GetField("alpha", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-            uiLabelWorldCornersProperty = type.GetProperty("worldCorners", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-            uiLabelWorldCornersField = type.GetField("worldCorners", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-            uiLabelMembersCached = true;
-        }
-
-        private static PropertyInfo GetUILabelProperty(Type runtimeType, Type labelType, string name)
-        {
-            if (runtimeType == null)
-            {
-                return null;
-            }
-
-            PropertyInfo property = runtimeType.GetProperty(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-            if (property != null)
-            {
-                return property;
-            }
-
-            if (labelType != null && labelType != runtimeType)
-            {
-                return labelType.GetProperty(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-            }
-
-            return null;
-        }
-
-        private static FieldInfo GetUILabelField(Type runtimeType, Type labelType, string name)
-        {
-            if (runtimeType == null)
-            {
-                return null;
-            }
-
-            FieldInfo field = runtimeType.GetField(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-            if (field != null)
-            {
-                return field;
-            }
-
-            if (labelType != null && labelType != runtimeType)
-            {
-                return labelType.GetField(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-            }
-
-            return null;
         }
 
         private static object ReadMemberValue(Component component, Type componentType, PropertyInfo property, FieldInfo field)
@@ -441,38 +366,46 @@ namespace TLDAccessibility.A11y.UI
             return null;
         }
 
-        private static PropertyInfo ResolveProperty(Type runtimeType, PropertyInfo cachedProperty, string name)
+        private static PropertyInfo ResolveUILabelProperty(Type runtimeType, Type labelType, string name)
         {
             if (runtimeType == null)
             {
                 return null;
             }
 
-            if (cachedProperty != null
-                && cachedProperty.DeclaringType != null
-                && cachedProperty.DeclaringType.IsAssignableFrom(runtimeType))
+            PropertyInfo property = runtimeType.GetProperty(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            if (property != null)
             {
-                return cachedProperty;
+                return property;
             }
 
-            return runtimeType.GetProperty(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            if (labelType != null && labelType != runtimeType)
+            {
+                return labelType.GetProperty(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            }
+
+            return null;
         }
 
-        private static FieldInfo ResolveField(Type runtimeType, FieldInfo cachedField, string name)
+        private static FieldInfo ResolveUILabelField(Type runtimeType, Type labelType, string name)
         {
             if (runtimeType == null)
             {
                 return null;
             }
 
-            if (cachedField != null
-                && cachedField.DeclaringType != null
-                && cachedField.DeclaringType.IsAssignableFrom(runtimeType))
+            FieldInfo field = runtimeType.GetField(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            if (field != null)
             {
-                return cachedField;
+                return field;
             }
 
-            return runtimeType.GetField(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            if (labelType != null && labelType != runtimeType)
+            {
+                return labelType.GetField(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            }
+
+            return null;
         }
 
         private static void EnsureUILocalizeMembers()

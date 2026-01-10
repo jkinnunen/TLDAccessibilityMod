@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
+using TLDAccessibility;
 using TLDAccessibility.A11y.Logging;
 using TLDAccessibility.A11y.Model;
 using TLDAccessibility.A11y.Output;
@@ -15,6 +16,9 @@ namespace TLDAccessibility.A11y.UI
         private const string UIButtonTypeName = "UIButton";
         private const string MainMenuSceneName = "MainMenu";
         private const float PollIntervalSeconds = 0.15f;
+        private const float HighlightDebounceSeconds = 0.6f;
+        private const float HeartbeatIntervalSeconds = 10f;
+        private const float InitialSpeakDelaySeconds = 0.75f;
 
         private static bool buttonColorTypeChecked;
         private static Type buttonColorType;
@@ -23,12 +27,18 @@ namespace TLDAccessibility.A11y.UI
 
         private readonly A11ySpeechService speechService;
         private float nextPollTime;
+        private float nextHeartbeatTime;
         private int lastSelectedInstanceId = -1;
         private string lastSelectedState;
         private string lastSelectedLabel;
-        private int lastSpokenInstanceId = -1;
         private string lastSpokenLabel;
+        private string lastSpokenPath;
+        private float lastSpokenTime;
         private readonly HashSet<int> lastHoverInstanceIds = new HashSet<int>();
+        private bool wasInMainMenu;
+        private bool initialSpeakPending;
+        private bool initialSpeakCompleted;
+        private float initialSpeakReadyTime;
 
         private HighlightProbeSnapshot lastSnapshot = new HighlightProbeSnapshot("(null)", "(none)", "(none)");
 
@@ -45,42 +55,75 @@ namespace TLDAccessibility.A11y.UI
             }
 
             nextPollTime = Time.unscaledTime + PollIntervalSeconds;
-            if (!IsMainMenuScene())
+            try
             {
-                ResetSelection();
-                return;
+                LogHeartbeatIfNeeded();
+
+                bool isMainMenu = IsMainMenuScene();
+                if (!isMainMenu)
+                {
+                    ResetSelection();
+                    return;
+                }
+
+                if (!wasInMainMenu)
+                {
+                    wasInMainMenu = true;
+                    ScheduleInitialSpeak();
+                }
+
+                HighlightCandidate selected = SelectHighlightedCandidate(out HashSet<int> hoverIds);
+                UpdateHoverCache(hoverIds);
+                if (selected == null)
+                {
+                    lastSnapshot = new HighlightProbeSnapshot("(null)", "(none)", "(none)");
+                    return;
+                }
+
+                string label = ResolveCandidateLabel(selected.Component);
+                string normalizedLabel = VisibilityUtil.NormalizeText(label);
+                string path = MenuProbe.BuildHierarchyPath(selected.Component.transform);
+                lastSnapshot = new HighlightProbeSnapshot(path, selected.StateName, string.IsNullOrWhiteSpace(normalizedLabel) ? "(none)" : normalizedLabel);
+
+                if (selected.InstanceId == lastSelectedInstanceId
+                    && string.Equals(selected.StateName, lastSelectedState, StringComparison.Ordinal))
+                {
+                    TryHandleInitialSpeak(normalizedLabel, path, selected.StateName);
+                    return;
+                }
+
+                lastSelectedInstanceId = selected.InstanceId;
+                lastSelectedState = selected.StateName;
+                lastSelectedLabel = normalizedLabel;
+
+                float now = Time.unscaledTime;
+                A11yLogger.Info($"Menu highlight: selectedPath={path}, state={selected.StateName}, label=\"{normalizedLabel}\"");
+                A11yLogger.Info($"Menu highlight speak request: text=\"{normalizedLabel}\", path={path}, state={selected.StateName}, time={now:0.###}");
+
+                if (string.IsNullOrWhiteSpace(normalizedLabel))
+                {
+                    LogSpeakSuppressed("EmptyText", normalizedLabel, path, selected.StateName, now);
+                    return;
+                }
+
+                if (ShouldSuppressByDebounce(normalizedLabel, path, now))
+                {
+                    LogSpeakSuppressed("Debounce", normalizedLabel, path, selected.StateName, now);
+                    return;
+                }
+
+                if (speechService == null || !speechService.IsAvailable)
+                {
+                    LogSpeakSuppressed("SpeechDisabled", normalizedLabel, path, selected.StateName, now);
+                    ScheduleInitialSpeak();
+                    return;
+                }
+
+                TrySpeakHighlight(normalizedLabel, path, selected.StateName, now);
             }
-
-            HighlightCandidate selected = SelectHighlightedCandidate(out HashSet<int> hoverIds);
-            UpdateHoverCache(hoverIds);
-            if (selected == null)
+            catch (Exception ex)
             {
-                lastSnapshot = new HighlightProbeSnapshot("(null)", "(none)", "(none)");
-                return;
-            }
-
-            string label = ResolveCandidateLabel(selected.Component);
-            string normalizedLabel = VisibilityUtil.NormalizeText(label);
-            string path = MenuProbe.BuildHierarchyPath(selected.Component.transform);
-            lastSnapshot = new HighlightProbeSnapshot(path, selected.StateName, string.IsNullOrWhiteSpace(normalizedLabel) ? "(none)" : normalizedLabel);
-
-            if (selected.InstanceId == lastSelectedInstanceId
-                && string.Equals(selected.StateName, lastSelectedState, StringComparison.Ordinal))
-            {
-                return;
-            }
-
-            lastSelectedInstanceId = selected.InstanceId;
-            lastSelectedState = selected.StateName;
-            lastSelectedLabel = normalizedLabel;
-            A11yLogger.Info($"Menu highlight: selectedPath={path}, state={selected.StateName}, label=\"{normalizedLabel}\"");
-
-            if (!string.IsNullOrWhiteSpace(normalizedLabel)
-                && (selected.InstanceId != lastSpokenInstanceId || !string.Equals(normalizedLabel, lastSpokenLabel, StringComparison.Ordinal)))
-            {
-                speechService?.Speak(normalizedLabel, A11ySpeechPriority.Normal, "menu_highlight", true);
-                lastSpokenInstanceId = selected.InstanceId;
-                lastSpokenLabel = normalizedLabel;
+                A11yLogger.Warning($"Menu highlight poll failed: {ex}");
             }
         }
 
@@ -106,10 +149,133 @@ namespace TLDAccessibility.A11y.UI
             lastSelectedInstanceId = -1;
             lastSelectedState = null;
             lastSelectedLabel = null;
-            lastSpokenInstanceId = -1;
             lastSpokenLabel = null;
+            lastSpokenPath = null;
+            lastSpokenTime = 0f;
             lastHoverInstanceIds.Clear();
             lastSnapshot = new HighlightProbeSnapshot("(null)", "(none)", "(none)");
+            wasInMainMenu = false;
+            initialSpeakPending = false;
+            initialSpeakCompleted = false;
+            initialSpeakReadyTime = 0f;
+        }
+
+        private void LogHeartbeatIfNeeded()
+        {
+            if (Settings.Instance.Verbosity != VerbosityLevel.Detailed)
+            {
+                return;
+            }
+
+            float now = Time.unscaledTime;
+            if (now < nextHeartbeatTime)
+            {
+                return;
+            }
+
+            nextHeartbeatTime = now + HeartbeatIntervalSeconds;
+            string sceneName = SceneManager.GetActiveScene().name ?? string.Empty;
+            A11yLogger.Info($"Menu highlight heartbeat: scene={sceneName}, time={now:0.###}");
+        }
+
+        private void ScheduleInitialSpeak()
+        {
+            if (initialSpeakCompleted)
+            {
+                return;
+            }
+
+            initialSpeakPending = true;
+            initialSpeakReadyTime = Time.unscaledTime + InitialSpeakDelaySeconds;
+        }
+
+        private void TryHandleInitialSpeak(string label, string path, string state)
+        {
+            if (!initialSpeakPending || initialSpeakCompleted)
+            {
+                return;
+            }
+
+            if (Time.unscaledTime < initialSpeakReadyTime)
+            {
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(label))
+            {
+                return;
+            }
+
+            if (speechService == null || !speechService.IsAvailable)
+            {
+                return;
+            }
+
+            float now = Time.unscaledTime;
+            A11yLogger.Info($"Menu highlight initial speak request: text=\"{label}\", path={path}, state={state}, time={now:0.###}");
+            TrySpeakHighlight(label, path, state, now);
+        }
+
+        private bool ShouldSuppressByDebounce(string label, string path, float now)
+        {
+            if (string.IsNullOrWhiteSpace(label))
+            {
+                return true;
+            }
+
+            if (!string.Equals(label, lastSpokenLabel, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            if (!string.Equals(path, lastSpokenPath, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            return now - lastSpokenTime < HighlightDebounceSeconds;
+        }
+
+        private void TrySpeakHighlight(string label, string path, string state, float now)
+        {
+            if (speechService == null)
+            {
+                LogSpeakSuppressed("SpeechDisabled", label, path, state, now);
+                return;
+            }
+
+            bool accepted = speechService.TrySpeak(
+                label,
+                A11ySpeechPriority.Normal,
+                "menu_highlight",
+                true,
+                out A11ySpeechService.SpeechSuppressionReason suppressionReason,
+                new A11ySpeechService.SpeechRequestOptions
+                {
+                    BypassCooldown = true,
+                    BypassAutoRateLimit = true
+                });
+
+            if (!accepted)
+            {
+                LogSpeakSuppressed(suppressionReason.ToString(), label, path, state, now);
+                return;
+            }
+
+            lastSpokenLabel = label;
+            lastSpokenPath = path;
+            lastSpokenTime = now;
+            initialSpeakPending = false;
+            initialSpeakCompleted = true;
+        }
+
+        private static void LogSpeakSuppressed(string reason, string label, string path, string state, float now)
+        {
+            string safeLabel = string.IsNullOrWhiteSpace(label) ? "(none)" : label;
+            string safePath = string.IsNullOrWhiteSpace(path) ? "(null)" : path;
+            string safeState = string.IsNullOrWhiteSpace(state) ? "(null)" : state;
+            string safeReason = string.IsNullOrWhiteSpace(reason) ? "Unknown" : reason;
+            A11yLogger.Info($"Menu highlight speak suppressed: reason={safeReason}, text=\"{safeLabel}\", path={safePath}, state={safeState}, time={now:0.###}");
         }
 
         private HighlightCandidate SelectHighlightedCandidate(out HashSet<int> hoverIds)
