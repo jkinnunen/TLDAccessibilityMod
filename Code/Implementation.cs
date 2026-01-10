@@ -24,6 +24,7 @@ namespace TLDAccessibility
         private Settings settings;
         private MenuProbe menuProbe;
         private MenuSelectionTracker menuSelectionTracker;
+        private MenuHighlightTracker menuHighlightTracker;
         private const int NguiLabelSnapshotLimit = 20;
         private static bool nguiLabelEntryExceptionLogged;
 
@@ -39,6 +40,7 @@ namespace TLDAccessibility
             TextChangeHandler.SpeechService = speechService;
             menuProbe = new MenuProbe();
             menuSelectionTracker = new MenuSelectionTracker(speechService);
+            menuHighlightTracker = new MenuHighlightTracker(speechService);
 
             harmony = new HarmonyLib.Harmony("TLDAccessibility.A11y");
             FocusTracker.ApplyHarmonyPatches(harmony, focusTracker);
@@ -56,6 +58,7 @@ namespace TLDAccessibility
             focusTracker?.Update();
             TmpTextPolling.Update();
             menuSelectionTracker?.Update();
+            menuHighlightTracker?.Update();
 
             HandleDebugHotkey();
             HandleHotkeys();
@@ -314,6 +317,7 @@ namespace TLDAccessibility
             LogEventSystemDiagnostics();
             LogNguiSelectionDiagnostics();
             LogMenuSelectionTrackerDiagnostics();
+            LogMenuHighlightTrackerDiagnostics();
             LogNguiUILabelRawDump();
             LogCameraCensus();
             List<Transform> transforms = FindAllTransforms();
@@ -342,6 +346,17 @@ namespace TLDAccessibility
                 string reason = string.IsNullOrWhiteSpace(snapshot.FailureReason) ? "(unknown)" : snapshot.FailureReason;
                 A11yLogger.Info($"MenuProbe menu selection: unresolvedReason={reason}");
             }
+        }
+
+        private void LogMenuHighlightTrackerDiagnostics()
+        {
+            if (menuHighlightTracker == null)
+            {
+                A11yLogger.Info("MenuProbe NGUI highlight: tracker unavailable.");
+                return;
+            }
+
+            menuHighlightTracker.LogDiagnostics();
         }
 
         private static void LogNguiSelectionDiagnostics()
