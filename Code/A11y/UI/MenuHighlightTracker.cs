@@ -8,22 +8,38 @@ using TLDAccessibility.A11y.Output;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
+// Changelog: Added menu context tracking, debounced highlight narration, menu title narration, and richer diagnostics to improve reliability.
 namespace TLDAccessibility.A11y.UI
 {
     internal sealed class MenuHighlightTracker
     {
         private const string UIButtonColorTypeName = "UIButtonColor";
         private const string UIButtonTypeName = "UIButton";
+        private const string UIToggleTypeName = "UIToggle";
+        private const string UISliderTypeName = "UISlider";
+        private const string UIPopupListTypeName = "UIPopupList";
+        private const string UISelectionListTypeName = "UISelectionList";
         private const string MainMenuSceneName = "MainMenu";
         private const float PollIntervalSeconds = 0.15f;
-        private const float HighlightDebounceSeconds = 0.6f;
+        private const float HighlightDebounceSeconds = 0.15f;
         private const float HeartbeatIntervalSeconds = 10f;
-        private const float InitialSpeakDelaySeconds = 0.75f;
+        private const float MenuReadyDelaySeconds = 0.5f;
+        private const float TitleDebounceSeconds = 0.15f;
+        private static readonly HotkeyBinding StateDumpHotkey = new HotkeyBinding(KeyCode.F12, true, true, true);
 
         private static bool buttonColorTypeChecked;
         private static Type buttonColorType;
         private static bool buttonTypeChecked;
         private static Type buttonType;
+        private static bool toggleTypeChecked;
+        private static Type toggleType;
+        private static bool sliderTypeChecked;
+        private static Type sliderType;
+        private static bool popupListTypeChecked;
+        private static Type popupListType;
+        private static bool selectionListTypeChecked;
+        private static Type selectionListType;
+        private static readonly HashSet<string> reflectionFailureLogged = new HashSet<string>();
 
         private readonly A11ySpeechService speechService;
         private float nextPollTime;
@@ -31,14 +47,30 @@ namespace TLDAccessibility.A11y.UI
         private int lastSelectedInstanceId = -1;
         private string lastSelectedState;
         private string lastSelectedLabel;
+        private string lastSelectedPath;
+        private Component lastSelectedComponent;
         private string lastSpokenLabel;
         private string lastSpokenPath;
+        private string lastSpokenPanelId;
         private float lastSpokenTime;
         private readonly HashSet<int> lastHoverInstanceIds = new HashSet<int>();
         private bool wasInMainMenu;
-        private bool initialSpeakPending;
-        private bool initialSpeakCompleted;
-        private float initialSpeakReadyTime;
+
+        private string currentPanelId = "(unknown)";
+        private string lastPanelId = "(unknown)";
+        private float panelEnterTime;
+        private bool menuReady;
+        private bool menuTitleSpoken;
+
+        private PendingHighlight pendingHighlight;
+        private float pendingHighlightReadyTime;
+        private string pendingTitleText;
+        private float pendingTitleReadyTime;
+
+        private int suppressedDuplicateCount;
+        private int suppressedThrottleCount;
+        private int suppressedNotReadyCount;
+        private int suppressedEngineFailCount;
 
         private HighlightProbeSnapshot lastSnapshot = new HighlightProbeSnapshot("(null)", "(none)", "(none)");
 
@@ -49,12 +81,17 @@ namespace TLDAccessibility.A11y.UI
 
         public void Update()
         {
-            if (Time.unscaledTime < nextPollTime)
+            float now = Time.unscaledTime;
+            HandleStateDumpHotkey(now);
+            UpdateMenuReady(now);
+            ProcessPendingSpeech(now);
+
+            if (now < nextPollTime)
             {
                 return;
             }
 
-            nextPollTime = Time.unscaledTime + PollIntervalSeconds;
+            nextPollTime = now + PollIntervalSeconds;
             try
             {
                 LogHeartbeatIfNeeded();
@@ -69,7 +106,6 @@ namespace TLDAccessibility.A11y.UI
                 if (!wasInMainMenu)
                 {
                     wasInMainMenu = true;
-                    ScheduleInitialSpeak();
                 }
 
                 HighlightCandidate selected = SelectHighlightedCandidate(out HashSet<int> hoverIds);
@@ -85,41 +121,23 @@ namespace TLDAccessibility.A11y.UI
                 string path = MenuProbe.BuildHierarchyPath(selected.Component.transform);
                 lastSnapshot = new HighlightProbeSnapshot(path, selected.StateName, string.IsNullOrWhiteSpace(normalizedLabel) ? "(none)" : normalizedLabel);
 
+                UpdateMenuContext(path, now);
+
                 if (selected.InstanceId == lastSelectedInstanceId
                     && string.Equals(selected.StateName, lastSelectedState, StringComparison.Ordinal))
                 {
-                    TryHandleInitialSpeak(normalizedLabel, path, selected.StateName);
                     return;
                 }
 
                 lastSelectedInstanceId = selected.InstanceId;
                 lastSelectedState = selected.StateName;
                 lastSelectedLabel = normalizedLabel;
+                lastSelectedPath = path;
+                lastSelectedComponent = selected.Component;
 
-                float now = Time.unscaledTime;
                 A11yLogger.Info($"Menu highlight: selectedPath={path}, state={selected.StateName}, label=\"{normalizedLabel}\"");
-                A11yLogger.Info($"Menu highlight speak request: text=\"{normalizedLabel}\", path={path}, state={selected.StateName}, time={now:0.###}");
 
-                if (string.IsNullOrWhiteSpace(normalizedLabel))
-                {
-                    LogSpeakSuppressed("EmptyText", normalizedLabel, path, selected.StateName, now);
-                    return;
-                }
-
-                if (ShouldSuppressByDebounce(normalizedLabel, path, now))
-                {
-                    LogSpeakSuppressed("Debounce", normalizedLabel, path, selected.StateName, now);
-                    return;
-                }
-
-                if (speechService == null || !speechService.IsAvailable)
-                {
-                    LogSpeakSuppressed("SpeechDisabled", normalizedLabel, path, selected.StateName, now);
-                    ScheduleInitialSpeak();
-                    return;
-                }
-
-                TrySpeakHighlight(normalizedLabel, path, selected.StateName, now);
+                ScheduleHighlight(normalizedLabel, path, selected.StateName, selected.Component, now);
             }
             catch (Exception ex)
             {
@@ -149,15 +167,33 @@ namespace TLDAccessibility.A11y.UI
             lastSelectedInstanceId = -1;
             lastSelectedState = null;
             lastSelectedLabel = null;
+            lastSelectedPath = null;
+            lastSelectedComponent = null;
             lastSpokenLabel = null;
             lastSpokenPath = null;
+            lastSpokenPanelId = null;
             lastSpokenTime = 0f;
             lastHoverInstanceIds.Clear();
             lastSnapshot = new HighlightProbeSnapshot("(null)", "(none)", "(none)");
             wasInMainMenu = false;
-            initialSpeakPending = false;
-            initialSpeakCompleted = false;
-            initialSpeakReadyTime = 0f;
+            currentPanelId = "(unknown)";
+            lastPanelId = "(unknown)";
+            panelEnterTime = 0f;
+            menuReady = false;
+            menuTitleSpoken = false;
+            pendingHighlight = null;
+            pendingHighlightReadyTime = 0f;
+            pendingTitleText = null;
+            pendingTitleReadyTime = 0f;
+            ResetSuppressionCounters();
+        }
+
+        private void ResetSuppressionCounters()
+        {
+            suppressedDuplicateCount = 0;
+            suppressedThrottleCount = 0;
+            suppressedNotReadyCount = 0;
+            suppressedEngineFailCount = 0;
         }
 
         private void LogHeartbeatIfNeeded()
@@ -178,49 +214,808 @@ namespace TLDAccessibility.A11y.UI
             A11yLogger.Info($"Menu highlight heartbeat: scene={sceneName}, time={now:0.###}");
         }
 
-        private void ScheduleInitialSpeak()
+        private void UpdateMenuContext(string selectedPath, float now)
         {
-            if (initialSpeakCompleted)
+            string panelId = ExtractPanelId(selectedPath);
+            if (string.Equals(panelId, currentPanelId, StringComparison.Ordinal))
             {
                 return;
             }
 
-            initialSpeakPending = true;
-            initialSpeakReadyTime = Time.unscaledTime + InitialSpeakDelaySeconds;
+            lastPanelId = currentPanelId;
+            currentPanelId = panelId;
+            panelEnterTime = now;
+            menuReady = false;
+            menuTitleSpoken = false;
+            lastSpokenLabel = null;
+            lastSpokenPath = null;
+            lastSpokenPanelId = null;
+            lastSpokenTime = 0f;
+            pendingHighlight = null;
+            pendingHighlightReadyTime = 0f;
+            pendingTitleText = null;
+            pendingTitleReadyTime = 0f;
+            ResetSuppressionCounters();
+            speechService?.ClearQueue("menu_context_change");
+            A11yLogger.Info($"MENU CONTEXT ENTER panel={currentPanelId} from={lastPanelId}");
         }
 
-        private void TryHandleInitialSpeak(string label, string path, string state)
+        private void UpdateMenuReady(float now)
         {
-            if (!initialSpeakPending || initialSpeakCompleted)
+            if (menuReady)
             {
                 return;
             }
 
-            if (Time.unscaledTime < initialSpeakReadyTime)
+            if (panelEnterTime <= 0f)
             {
                 return;
             }
 
-            if (string.IsNullOrWhiteSpace(label))
+            if (IsMenuReadyInputPressed() || now - panelEnterTime >= MenuReadyDelaySeconds)
             {
+                menuReady = true;
+                A11yLogger.Info($"Menu ready: panel={currentPanelId}, elapsed={now - panelEnterTime:0.###}s");
+                ScheduleMenuTitle(now);
+                if (!string.IsNullOrWhiteSpace(lastSelectedLabel) && !string.IsNullOrWhiteSpace(lastSelectedPath))
+                {
+                    ScheduleHighlight(lastSelectedLabel, lastSelectedPath, lastSelectedState, lastSelectedComponent, now);
+                }
+            }
+        }
+
+        private static bool IsMenuReadyInputPressed()
+        {
+            return Input.GetKeyDown(KeyCode.UpArrow)
+                || Input.GetKeyDown(KeyCode.DownArrow)
+                || Input.GetKeyDown(KeyCode.LeftArrow)
+                || Input.GetKeyDown(KeyCode.RightArrow)
+                || Input.GetKeyDown(KeyCode.Return)
+                || Input.GetKeyDown(KeyCode.KeypadEnter)
+                || Input.GetKeyDown(KeyCode.Escape);
+        }
+
+        private void ScheduleHighlight(string label, string path, string state, Component component, float now)
+        {
+            pendingHighlight = new PendingHighlight(label, path, state, currentPanelId, component, now);
+            pendingHighlightReadyTime = now + HighlightDebounceSeconds;
+        }
+
+        private void ScheduleMenuTitle(float now)
+        {
+            if (menuTitleSpoken)
+            {
+                return;
+            }
+
+            string title = GetMenuTitleForPanel(currentPanelId, lastSelectedPath, lastSelectedLabel);
+            if (string.IsNullOrWhiteSpace(title))
+            {
+                menuTitleSpoken = true;
+                return;
+            }
+
+            pendingTitleText = title;
+            pendingTitleReadyTime = now + TitleDebounceSeconds;
+        }
+
+        private void ProcessPendingSpeech(float now)
+        {
+            if (!menuReady)
+            {
+                if (pendingTitleText != null && now >= pendingTitleReadyTime)
+                {
+                    suppressedNotReadyCount++;
+                    LogMenuSpeakDecision(false, "SUPPRESSED_MENU_NOT_READY", pendingTitleText, currentPanelId, "(title)", "title", true);
+                    pendingTitleText = null;
+                }
+
+                if (pendingHighlight != null && now >= pendingHighlightReadyTime)
+                {
+                    suppressedNotReadyCount++;
+                    LogMenuSpeakDecision(false, "SUPPRESSED_MENU_NOT_READY", pendingHighlight.Label, pendingHighlight.PanelId, pendingHighlight.Path, pendingHighlight.State, true);
+                    pendingHighlight = null;
+                }
+
+                return;
+            }
+
+            if (pendingTitleText != null && now >= pendingTitleReadyTime)
+            {
+                TrySpeakMenuTitle(pendingTitleText, now);
+                pendingTitleText = null;
+            }
+
+            if (pendingHighlight != null && now >= pendingHighlightReadyTime)
+            {
+                TrySpeakPendingHighlight(pendingHighlight, now);
+                pendingHighlight = null;
+            }
+        }
+
+        private void TrySpeakMenuTitle(string title, float now)
+        {
+            if (string.IsNullOrWhiteSpace(title))
+            {
+                LogMenuSpeakDecision(false, "EmptyTitle", title, currentPanelId, "(title)", "title", false);
                 return;
             }
 
             if (speechService == null || !speechService.IsAvailable)
             {
+                LogMenuSpeakDecision(false, "SpeechDisabled", title, currentPanelId, "(title)", "title", false);
                 return;
             }
 
-            float now = Time.unscaledTime;
-            A11yLogger.Info($"Menu highlight initial speak request: text=\"{label}\", path={path}, state={state}, time={now:0.###}");
-            TrySpeakHighlight(label, path, state, now);
+            bool accepted = speechService.TrySpeak(
+                title,
+                A11ySpeechPriority.Normal,
+                "menu_title",
+                true,
+                out A11ySpeechService.SpeechSuppressionReason suppressionReason,
+                new A11ySpeechService.SpeechRequestOptions
+                {
+                    BypassCooldown = true,
+                    BypassAutoRateLimit = true
+                });
+
+            if (!accepted)
+            {
+                if (suppressionReason == A11ySpeechService.SpeechSuppressionReason.Exception)
+                {
+                    suppressedEngineFailCount++;
+                }
+
+                LogMenuSpeakDecision(false, suppressionReason.ToString(), title, currentPanelId, "(title)", "title", false);
+                return;
+            }
+
+            menuTitleSpoken = true;
+            LogMenuSpeakDecision(true, "Accepted", title, currentPanelId, "(title)", "title", false);
         }
 
-        private bool ShouldSuppressByDebounce(string label, string path, float now)
+        private void TrySpeakPendingHighlight(PendingHighlight pending, float now)
+        {
+            if (pending == null)
+            {
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(pending.Label))
+            {
+                LogMenuSpeakDecision(false, "EmptyText", pending.Label, pending.PanelId, pending.Path, pending.State, true);
+                return;
+            }
+
+            if (ShouldSuppressDuplicate(pending.Label, pending.Path, pending.PanelId, now))
+            {
+                suppressedDuplicateCount++;
+                LogMenuSpeakDecision(false, "Duplicate", pending.Label, pending.PanelId, pending.Path, pending.State, true);
+                return;
+            }
+
+            if (speechService == null || !speechService.IsAvailable)
+            {
+                LogMenuSpeakDecision(false, "SpeechDisabled", pending.Label, pending.PanelId, pending.Path, pending.State, true);
+                return;
+            }
+
+            string narration = ResolveHighlightNarration(pending);
+            if (string.IsNullOrWhiteSpace(narration))
+            {
+                LogMenuSpeakDecision(false, "EmptyNarration", pending.Label, pending.PanelId, pending.Path, pending.State, true);
+                return;
+            }
+
+            bool accepted = speechService.TrySpeak(
+                narration,
+                A11ySpeechPriority.Normal,
+                "menu_highlight",
+                true,
+                out A11ySpeechService.SpeechSuppressionReason suppressionReason,
+                new A11ySpeechService.SpeechRequestOptions
+                {
+                    BypassCooldown = true,
+                    BypassAutoRateLimit = true
+                });
+
+            if (!accepted)
+            {
+                if (suppressionReason == A11ySpeechService.SpeechSuppressionReason.Exception)
+                {
+                    suppressedEngineFailCount++;
+                }
+
+                LogMenuSpeakDecision(false, suppressionReason.ToString(), narration, pending.PanelId, pending.Path, pending.State, true);
+                return;
+            }
+
+            lastSpokenLabel = pending.Label;
+            lastSpokenPath = pending.Path;
+            lastSpokenPanelId = pending.PanelId;
+            lastSpokenTime = now;
+            LogMenuSpeakDecision(true, "Accepted", narration, pending.PanelId, pending.Path, pending.State, true);
+        }
+
+        private string ResolveHighlightNarration(PendingHighlight pending)
+        {
+            if (pending == null)
+            {
+                return null;
+            }
+
+            Component component = pending.Component;
+            if (component == null)
+            {
+                return pending.Label;
+            }
+
+            GameObject target = component.gameObject;
+            if (target == null)
+            {
+                return pending.Label;
+            }
+
+            if (TryBuildToggleNarration(target, pending.Label, out string narration))
+            {
+                return narration;
+            }
+
+            if (TryBuildSliderNarration(target, pending.Label, out narration))
+            {
+                return narration;
+            }
+
+            if (TryBuildListNarration(target, pending.Label, out narration))
+            {
+                return narration;
+            }
+
+            return pending.Label;
+        }
+
+        private bool TryBuildToggleNarration(GameObject target, string fallbackLabel, out string narration)
+        {
+            narration = null;
+            Component toggle = FindComponentInParents(target, GetToggleType());
+            if (toggle == null)
+            {
+                return false;
+            }
+
+            bool? isOn = TryReadBool(toggle, "value", "isChecked", "isOn", "mIsChecked");
+            if (!isOn.HasValue)
+            {
+                return false;
+            }
+
+            string name = ResolveControlName(toggle.gameObject, fallbackLabel);
+            string state = isOn.Value ? "on" : "off";
+            narration = string.IsNullOrWhiteSpace(name) ? state : $"{name}: {state}";
+            return true;
+        }
+
+        private bool TryBuildSliderNarration(GameObject target, string fallbackLabel, out string narration)
+        {
+            narration = null;
+            Component slider = FindComponentInParents(target, GetSliderType());
+            if (slider == null)
+            {
+                return false;
+            }
+
+            float? value = TryReadFloat(slider, "value", "rawValue", "sliderValue");
+            if (!value.HasValue)
+            {
+                return false;
+            }
+
+            int percent = NormalizePercent(value.Value);
+            string name = ResolveControlName(slider.gameObject, fallbackLabel);
+            narration = string.IsNullOrWhiteSpace(name)
+                ? $"{percent} percent"
+                : $"{name}: {percent} percent";
+            return true;
+        }
+
+        private bool TryBuildListNarration(GameObject target, string fallbackLabel, out string narration)
+        {
+            narration = null;
+            Component popup = FindComponentInParents(target, GetPopupListType())
+                ?? FindComponentInParents(target, GetSelectionListType());
+            if (popup == null)
+            {
+                return false;
+            }
+
+            string value = TryReadString(popup, "value", "selection", "selectedValue", "current", "currentSelection");
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return false;
+            }
+
+            value = VisibilityUtil.NormalizeText(value);
+            string name = ResolveControlName(popup.gameObject, fallbackLabel);
+            narration = string.IsNullOrWhiteSpace(name) ? value : $"{name}: {value}";
+            return true;
+        }
+
+        private static int NormalizePercent(float value)
+        {
+            if (value < 0f)
+            {
+                return 0;
+            }
+
+            if (value <= 1.0f)
+            {
+                return Mathf.RoundToInt(value * 100f);
+            }
+
+            if (value <= 100f)
+            {
+                return Mathf.RoundToInt(value);
+            }
+
+            return Mathf.RoundToInt(Mathf.Clamp(value, 0f, 100f));
+        }
+
+        private string ResolveControlName(GameObject target, string fallbackLabel)
+        {
+            string normalizedFallback = VisibilityUtil.NormalizeText(fallbackLabel);
+            string name = FindLabelCandidate(target, normalizedFallback);
+            if (!string.IsNullOrWhiteSpace(name))
+            {
+                return name;
+            }
+
+            if (target.transform.parent != null)
+            {
+                Transform parent = target.transform.parent;
+                for (int i = 0; i < parent.childCount; i++)
+                {
+                    Transform sibling = parent.GetChild(i);
+                    if (sibling == null || sibling.gameObject == target)
+                    {
+                        continue;
+                    }
+
+                    name = FindLabelCandidate(sibling.gameObject, normalizedFallback);
+                    if (!string.IsNullOrWhiteSpace(name))
+                    {
+                        return name;
+                    }
+                }
+            }
+
+            return string.IsNullOrWhiteSpace(normalizedFallback) ? null : normalizedFallback;
+        }
+
+        private string FindLabelCandidate(GameObject root, string excludeLabel)
+        {
+            if (root == null)
+            {
+                return null;
+            }
+
+            Component[] components = root.GetComponentsInChildren<Component>(true);
+            string best = null;
+            int bestScore = int.MinValue;
+            for (int i = 0; i < components.Length; i++)
+            {
+                Component candidate = components[i];
+                if (candidate == null || !NguiReflection.IsLabel(candidate))
+                {
+                    continue;
+                }
+
+                if (!NguiReflection.TryGetUILabelTextDetails(candidate, out string rawText, out string processedText, out string localizeTerm))
+                {
+                    continue;
+                }
+
+                string text = VisibilityUtil.NormalizeText(!string.IsNullOrWhiteSpace(processedText) ? processedText : rawText);
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                    text = VisibilityUtil.NormalizeText(localizeTerm);
+                }
+
+                if (string.IsNullOrWhiteSpace(text) || IsPlaceholderText(text))
+                {
+                    continue;
+                }
+
+                if (!string.IsNullOrWhiteSpace(excludeLabel) && string.Equals(text, excludeLabel, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                string name = candidate.gameObject.name ?? string.Empty;
+                int score = 0;
+                if (name.IndexOf("Label", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    score += 10;
+                }
+
+                if (name.IndexOf("Title", StringComparison.OrdinalIgnoreCase) >= 0 || name.IndexOf("Header", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    score += 5;
+                }
+
+                score -= text.Length;
+                if (score > bestScore)
+                {
+                    bestScore = score;
+                    best = text;
+                }
+            }
+
+            return best;
+        }
+
+        private static Component FindComponentInParents(GameObject target, Type type)
+        {
+            if (target == null || type == null)
+            {
+                return null;
+            }
+
+            Transform current = target.transform;
+            int depth = 0;
+            while (current != null && depth < 5)
+            {
+                Component component = current.GetComponent(Il2CppInterop.Runtime.Il2CppType.From(type));
+                if (component != null)
+                {
+                    return component;
+                }
+
+                current = current.parent;
+                depth++;
+            }
+
+            return null;
+        }
+
+        private static bool? TryReadBool(Component component, params string[] memberNames)
+        {
+            if (component == null)
+            {
+                return null;
+            }
+
+            Type type = component.GetType();
+            for (int i = 0; i < memberNames.Length; i++)
+            {
+                string name = memberNames[i];
+                try
+                {
+                    PropertyInfo property = type.GetProperty(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                    if (property != null && property.PropertyType == typeof(bool))
+                    {
+                        return (bool)property.GetValue(component, null);
+                    }
+
+                    FieldInfo field = type.GetField(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                    if (field != null && field.FieldType == typeof(bool))
+                    {
+                        return (bool)field.GetValue(component);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    LogReflectionFailure(type, name, ex);
+                    return null;
+                }
+            }
+
+            return null;
+        }
+
+        private static float? TryReadFloat(Component component, params string[] memberNames)
+        {
+            if (component == null)
+            {
+                return null;
+            }
+
+            Type type = component.GetType();
+            for (int i = 0; i < memberNames.Length; i++)
+            {
+                string name = memberNames[i];
+                try
+                {
+                    PropertyInfo property = type.GetProperty(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                    if (property != null && property.PropertyType == typeof(float))
+                    {
+                        return (float)property.GetValue(component, null);
+                    }
+
+                    FieldInfo field = type.GetField(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                    if (field != null && field.FieldType == typeof(float))
+                    {
+                        return (float)field.GetValue(component);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    LogReflectionFailure(type, name, ex);
+                    return null;
+                }
+            }
+
+            return null;
+        }
+
+        private static string TryReadString(Component component, params string[] memberNames)
+        {
+            if (component == null)
+            {
+                return null;
+            }
+
+            Type type = component.GetType();
+            for (int i = 0; i < memberNames.Length; i++)
+            {
+                string name = memberNames[i];
+                try
+                {
+                    PropertyInfo property = type.GetProperty(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                    if (property != null && property.PropertyType == typeof(string))
+                    {
+                        return property.GetValue(component, null) as string;
+                    }
+
+                    FieldInfo field = type.GetField(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                    if (field != null && field.FieldType == typeof(string))
+                    {
+                        return field.GetValue(component) as string;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    LogReflectionFailure(type, name, ex);
+                    return null;
+                }
+            }
+
+            return null;
+        }
+
+        private static void LogReflectionFailure(Type type, string memberName, Exception ex)
+        {
+            string key = $"{type?.FullName ?? "(null)"}.{memberName}";
+            if (!reflectionFailureLogged.Add(key))
+            {
+                return;
+            }
+
+            A11yLogger.Warning($"Menu highlight reflection failed: {key} ex={ex.GetType().Name}: {ex.Message}");
+        }
+
+        private static Type GetToggleType()
+        {
+            if (toggleTypeChecked)
+            {
+                return toggleType;
+            }
+
+            toggleTypeChecked = true;
+            toggleType = FindTypeByName($"Il2Cpp.{UIToggleTypeName}") ?? FindTypeByName(UIToggleTypeName);
+            return toggleType;
+        }
+
+        private static Type GetSliderType()
+        {
+            if (sliderTypeChecked)
+            {
+                return sliderType;
+            }
+
+            sliderTypeChecked = true;
+            sliderType = FindTypeByName($"Il2Cpp.{UISliderTypeName}") ?? FindTypeByName(UISliderTypeName);
+            return sliderType;
+        }
+
+        private static Type GetPopupListType()
+        {
+            if (popupListTypeChecked)
+            {
+                return popupListType;
+            }
+
+            popupListTypeChecked = true;
+            popupListType = FindTypeByName($"Il2Cpp.{UIPopupListTypeName}") ?? FindTypeByName(UIPopupListTypeName);
+            return popupListType;
+        }
+
+        private static Type GetSelectionListType()
+        {
+            if (selectionListTypeChecked)
+            {
+                return selectionListType;
+            }
+
+            selectionListTypeChecked = true;
+            selectionListType = FindTypeByName($"Il2Cpp.{UISelectionListTypeName}") ?? FindTypeByName(UISelectionListTypeName);
+            return selectionListType;
+        }
+
+        private static string ExtractPanelId(string selectedPath)
+        {
+            if (string.IsNullOrWhiteSpace(selectedPath))
+            {
+                return "(unknown)";
+            }
+
+            string[] segments = selectedPath.Split(new[] { '/' }, StringSplitOptions.RemoveEmptyEntries);
+            for (int i = 0; i < segments.Length; i++)
+            {
+                string segment = segments[i];
+                if (segment.StartsWith("Panel_", StringComparison.Ordinal))
+                {
+                    return segment;
+                }
+            }
+
+            return "(unknown)";
+        }
+
+        private string GetMenuTitleForPanel(string panelId, string selectedPath, string selectedLabel)
+        {
+            _ = selectedPath;
+            if (string.IsNullOrWhiteSpace(panelId) || panelId == "(unknown)")
+            {
+                return null;
+            }
+
+            Transform panelRoot = FindPanelRoot(panelId);
+            if (panelRoot == null)
+            {
+                return null;
+            }
+
+            Component[] components = panelRoot.GetComponentsInChildren<Component>(true);
+            List<TitleCandidate> candidates = new List<TitleCandidate>();
+            for (int i = 0; i < components.Length; i++)
+            {
+                Component component = components[i];
+                if (component == null || !NguiReflection.IsLabel(component))
+                {
+                    continue;
+                }
+
+                if (!NguiReflection.TryGetUILabelTextDetails(component, out string rawText, out string processedText, out string localizeTerm))
+                {
+                    continue;
+                }
+
+                string text = VisibilityUtil.NormalizeText(!string.IsNullOrWhiteSpace(processedText) ? processedText : rawText);
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                    text = VisibilityUtil.NormalizeText(localizeTerm);
+                }
+
+                if (string.IsNullOrWhiteSpace(text) || IsPlaceholderText(text))
+                {
+                    continue;
+                }
+
+                if (!string.IsNullOrWhiteSpace(selectedLabel) && string.Equals(text, selectedLabel, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                string name = component.gameObject.name ?? string.Empty;
+                int score = 0;
+                if (name.IndexOf("Header", StringComparison.OrdinalIgnoreCase) >= 0
+                    || name.IndexOf("Title", StringComparison.OrdinalIgnoreCase) >= 0
+                    || name.IndexOf("MenuHeader", StringComparison.OrdinalIgnoreCase) >= 0
+                    || name.IndexOf("Label_Title", StringComparison.OrdinalIgnoreCase) >= 0
+                    || name.IndexOf("PanelHeader", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    score += 50;
+                }
+
+                if (text.Length <= 60)
+                {
+                    score += 10;
+                }
+
+                score -= text.Length;
+                candidates.Add(new TitleCandidate(text, score, name));
+            }
+
+            if (candidates.Count == 0)
+            {
+#if DEBUG
+                A11yLogger.Info($"TITLE_NOT_FOUND panel={panelId}");
+#endif
+                return null;
+            }
+
+            candidates.Sort((left, right) => right.Score.CompareTo(left.Score));
+            string title = candidates[0].Text;
+#if DEBUG
+            if (string.IsNullOrWhiteSpace(title))
+            {
+                int limit = Math.Min(5, candidates.Count);
+                for (int i = 0; i < limit; i++)
+                {
+                    TitleCandidate candidate = candidates[i];
+                    A11yLogger.Info($"TITLE_CANDIDATE panel={panelId} text=\"{candidate.Text}\" name={candidate.Name} score={candidate.Score}");
+                }
+            }
+#endif
+            return title;
+        }
+
+        private static Transform FindPanelRoot(string panelId)
+        {
+            if (string.IsNullOrWhiteSpace(panelId) || panelId == "(unknown)")
+            {
+                return null;
+            }
+
+            Transform[] transforms = Resources.FindObjectsOfTypeAll<Transform>();
+            if (transforms == null || transforms.Length == 0)
+            {
+                return null;
+            }
+
+            Transform best = null;
+            for (int i = 0; i < transforms.Length; i++)
+            {
+                Transform candidate = transforms[i];
+                if (candidate == null || candidate.name != panelId)
+                {
+                    continue;
+                }
+
+                if (candidate.gameObject != null && candidate.gameObject.activeInHierarchy)
+                {
+                    return candidate;
+                }
+
+                if (best == null)
+                {
+                    best = candidate;
+                }
+            }
+
+            return best;
+        }
+
+        private void HandleStateDumpHotkey(float now)
+        {
+            if (!HotkeyUtil.IsPressed(StateDumpHotkey))
+            {
+                return;
+            }
+
+            int queueCount = speechService?.QueueCount ?? 0;
+            float lastOkTime = speechService?.LastOutputOkTime ?? -1f;
+            float lastOkAgeMs = lastOkTime > 0f ? (now - lastOkTime) * 1000f : -1f;
+            string lastError = speechService?.LastOutputError ?? string.Empty;
+            string pendingLabel = pendingHighlight?.Label ?? string.Empty;
+            string lastHighlight = lastSelectedLabel ?? string.Empty;
+            A11yLogger.Info(
+                $"A11Y STATE DUMP panel={currentPanelId} menuReady={menuReady} titleSpoken={menuTitleSpoken} " +
+                $"lastHighlight=\"{lastHighlight}\" pending=\"{pendingLabel}\" q={queueCount} " +
+                $"lastOutOkAgeMs={lastOkAgeMs:0} lastOutErr=\"{lastError}\" " +
+                $"suppressed={{dup:{suppressedDuplicateCount}, thr:{suppressedThrottleCount}, notReady:{suppressedNotReadyCount}, eng:{suppressedEngineFailCount}}}");
+        }
+
+        private bool ShouldSuppressDuplicate(string label, string path, string panelId, float now)
         {
             if (string.IsNullOrWhiteSpace(label))
             {
                 return true;
+            }
+
+            if (!string.Equals(panelId, lastSpokenPanelId, StringComparison.Ordinal))
+            {
+                return false;
             }
 
             if (!string.Equals(label, lastSpokenLabel, StringComparison.Ordinal))
@@ -236,46 +1031,16 @@ namespace TLDAccessibility.A11y.UI
             return now - lastSpokenTime < HighlightDebounceSeconds;
         }
 
-        private void TrySpeakHighlight(string label, string path, string state, float now)
-        {
-            if (speechService == null)
-            {
-                LogSpeakSuppressed("SpeechDisabled", label, path, state, now);
-                return;
-            }
-
-            bool accepted = speechService.TrySpeak(
-                label,
-                A11ySpeechPriority.Normal,
-                "menu_highlight",
-                true,
-                out A11ySpeechService.SpeechSuppressionReason suppressionReason,
-                new A11ySpeechService.SpeechRequestOptions
-                {
-                    BypassCooldown = true,
-                    BypassAutoRateLimit = true
-                });
-
-            if (!accepted)
-            {
-                LogSpeakSuppressed(suppressionReason.ToString(), label, path, state, now);
-                return;
-            }
-
-            lastSpokenLabel = label;
-            lastSpokenPath = path;
-            lastSpokenTime = now;
-            initialSpeakPending = false;
-            initialSpeakCompleted = true;
-        }
-
-        private static void LogSpeakSuppressed(string reason, string label, string path, string state, float now)
+        private void LogMenuSpeakDecision(bool accepted, string reason, string label, string panelId, string path, string state, bool pending)
         {
             string safeLabel = string.IsNullOrWhiteSpace(label) ? "(none)" : label;
             string safePath = string.IsNullOrWhiteSpace(path) ? "(null)" : path;
             string safeState = string.IsNullOrWhiteSpace(state) ? "(null)" : state;
+            string safePanel = string.IsNullOrWhiteSpace(panelId) ? "(unknown)" : panelId;
             string safeReason = string.IsNullOrWhiteSpace(reason) ? "Unknown" : reason;
-            A11yLogger.Info($"Menu highlight speak suppressed: reason={safeReason}, text=\"{safeLabel}\", path={safePath}, state={safeState}, time={now:0.###}");
+            int queueCount = speechService?.QueueCount ?? 0;
+            A11yLogger.Info(
+                $"MenuSpeak DECISION accept={accepted.ToString().ToLowerInvariant()} reason={safeReason} panel={safePanel} label=\"{safeLabel}\" path={safePath} state={safeState} pending={pending.ToString().ToLowerInvariant()} q={queueCount}");
         }
 
         private HighlightCandidate SelectHighlightedCandidate(out HashSet<int> hoverIds)
@@ -688,6 +1453,40 @@ namespace TLDAccessibility.A11y.UI
             public bool IsHover { get; }
             public int Depth { get; }
             public int InstanceId { get; }
+        }
+
+        private sealed class PendingHighlight
+        {
+            public PendingHighlight(string label, string path, string state, string panelId, Component component, float detectedTime)
+            {
+                Label = label;
+                Path = path;
+                State = state;
+                PanelId = panelId;
+                Component = component;
+                DetectedTime = detectedTime;
+            }
+
+            public string Label { get; }
+            public string Path { get; }
+            public string State { get; }
+            public string PanelId { get; }
+            public Component Component { get; }
+            public float DetectedTime { get; }
+        }
+
+        private readonly struct TitleCandidate
+        {
+            public TitleCandidate(string text, int score, string name)
+            {
+                Text = text;
+                Score = score;
+                Name = name;
+            }
+
+            public string Text { get; }
+            public int Score { get; }
+            public string Name { get; }
         }
     }
 }
